@@ -1,0 +1,45 @@
+[package]
+name = "layer4-rust-cpe-simple"
+version = "0.1.0"
+edition = "2021"
+authors = ["The Agency Institute"]
+license = "MIT"
+description = "Layer 4: Context Prediction Engine - Simplified Working Version"
+
+[dependencies]
+# MFN Core interfaces
+mfn-core = { path = "../mfn-core" }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1.77"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+
+# Logging
+log = "0.4"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Collections
+indexmap = "2.0"
+
+# Statistics
+statistical = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+
+[lib]
+name = "layer4_cpe_simple"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]

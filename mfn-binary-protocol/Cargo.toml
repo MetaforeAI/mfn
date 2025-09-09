@@ -1,0 +1,76 @@
+[package]
+name = "mfn-binary-protocol"
+version = "0.1.0"
+edition = "2021"
+authors = ["MFN Development Team"]
+description = "High-performance binary protocol for Memory Flow Network Phase 2"
+license = "MIT"
+repository = "https://github.com/mfn/telepathy"
+keywords = ["binary", "protocol", "serialization", "memory", "performance"]
+categories = ["encoding", "network-programming", "data-structures"]
+
+[dependencies]
+# Core serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Performance and compression
+lz4_flex = "0.11"
+
+# FFI support
+libc = "0.2"
+
+# Async support
+tokio = { version = "1.0", features = ["full"], optional = true }
+
+# Development and testing
+criterion = { version = "0.5", optional = true }
+proptest = { version = "1.0", optional = true }
+
+# MFN core types (would be actual dependency)
+# mfn-core = { path = "../mfn-core" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.0"
+tokio-test = "0.4"
+
+[features]
+default = ["compression", "async"]
+compression = ["lz4_flex"]
+async = ["tokio"]
+benchmarks = ["criterion"]
+property_testing = ["proptest"]
+ffi = []
+
+[lib]
+name = "mfn_binary_protocol"
+crate-type = ["cdylib", "rlib"]
+
+[[example]]
+name = "performance_benchmark"
+required-features = ["benchmarks"]
+
+[[example]]
+name = "unix_socket_integration"
+required-features = ["async"]
+
+[[bench]]
+name = "serialization_bench"
+harness = false
+required-features = ["benchmarks"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+lto = true
+codegen-units = 1
+debug = true

@@ -1,0 +1,200 @@
+{
+  "timestamp": "2025-09-08T02:35:51.314697",
+  "benchmark_results": {
+    "layer1_exact_matching": {
+      "test_name": "Layer 1 Exact Matching",
+      "target_performance": "<0.1ms per lookup",
+      "memory_sizes_tested": [
+        1000,
+        5000
+      ],
+      "results": {
+        "1000": {
+          "lookups_tested": 1000,
+          "average_time_ms": 0.00017171306535601616,
+          "median_time_ms": 0.0001601874828338623,
+          "p95_time_ms": 0.00018998980522155762,
+          "p99_time_ms": 0.0002300366759300232,
+          "min_time_ms": 0.00013969838619232178,
+          "max_time_ms": 0.0036670826375484467,
+          "meets_target": "True",
+          "success_rate": 100.0,
+          "throughput_ops_per_sec": 5823668.6761527425
+        },
+        "5000": {
+          "lookups_tested": 1000,
+          "average_time_ms": 0.0001654522493481636,
+          "median_time_ms": 0.00016065314412117004,
+          "p95_time_ms": 0.0001909211277961731,
+          "p99_time_ms": 0.00021149404346942893,
+          "min_time_ms": 0.00013969838619232178,
+          "max_time_ms": 0.0006719492375850677,
+          "meets_target": "True",
+          "success_rate": 100.0,
+          "throughput_ops_per_sec": 6044039.920519214
+        }
+      }
+    },
+    "layer2_similarity_search": {
+      "test_name": "Layer 2 Similarity Search",
+      "target_performance": "<5ms per similarity search",
+      "dataset_sizes_tested": [
+        500,
+        1000
+      ],
+      "results": {
+        "500": {
+          "searches_tested": 25,
+          "average_time_ms": 1.0125824250280857,
+          "median_time_ms": 1.0094339959323406,
+          "p95_time_ms": 1.018883939832449,
+          "p99_time_ms": 1.0461047478020191,
+          "min_time_ms": 1.0089939460158348,
+          "max_time_ms": 1.054688822478056,
+          "average_accuracy": 0.9167754131187729,
+          "meets_target": "True",
+          "throughput_ops_per_sec": 987.5739251273923,
+          "neural_activations_avg": 1500,
+          "reservoir_utilization": 0.75
+        },
+        "1000": {
+          "searches_tested": 50,
+          "average_time_ms": 1.0103928949683905,
+          "median_time_ms": 1.009529922157526,
+          "p95_time_ms": 1.0166903957724571,
+          "p99_time_ms": 1.019982029683888,
+          "min_time_ms": 1.0086731053888798,
+          "max_time_ms": 1.0203751735389233,
+          "average_accuracy": 0.9163760230581127,
+          "meets_target": "True",
+          "throughput_ops_per_sec": 989.714006283946,
+          "neural_activations_avg": 1500,
+          "reservoir_utilization": 0.75
+        }
+      }
+    },
+    "layer3_associative_search": {
+      "test_name": "Layer 3 Associative Search",
+      "target_performance": "<20ms per associative search",
+      "configurations_tested": [
+        {
+          "max_depth": 2,
+          "max_results": 5,
+          "search_mode": "breadth_first"
+        }
+      ],
+      "results": {
+        "depth2_results5_breadth_first": {
+          "searches_tested": 10,
+          "successful_searches": 10,
+          "average_time_ms": 0.7771258242428303,
+          "median_time_ms": 0.5843502003699541,
+          "p95_time_ms": 1.6550086671486484,
+          "p99_time_ms": 2.0881302701309323,
+          "min_time_ms": 0.5472619086503983,
+          "max_time_ms": 2.196410670876503,
+          "average_accuracy": 0.6906843592332212,
+          "meets_target": "True",
+          "error_rate": 0.0,
+          "errors": [],
+          "avg_nodes_explored": 5.5,
+          "avg_paths_found": 4.5,
+          "throughput_ops_per_sec": 1286.7929089530908
+        }
+      }
+    },
+    "capacity_testing": {
+      "test_name": "System Capacity",
+      "target_performance": "50M+ memories",
+      "capacities_tested": [
+        1000
+      ],
+      "results": {
+        "1000": {
+          "total_duration_seconds": 0.010182857513427734,
+          "successful_operations": 1000,
+          "failed_operations": 0,
+          "success_rate": 1.0,
+          "operations_per_second": 98204.26129712012,
+          "average_batch_time_ms": 1.0040785185992718,
+          "peak_memory_usage_mb": 1.0,
+          "estimated_50m_duration_hours": 0.1414285765753852,
+          "meets_target": true
+        }
+      }
+    },
+    "throughput_testing": {
+      "test_name": "Sustained Throughput",
+      "target_performance": "1000+ queries/second",
+      "qps_targets_tested": [
+        100
+      ],
+      "results": {
+        "100": {
+          "test_duration_seconds": 30.111248016357422,
+          "queries_attempted": 3000,
+          "queries_completed": 3000,
+          "successful_queries": 3000,
+          "failed_queries": 0,
+          "actual_qps": 99.63054332289055,
+          "target_qps": 100,
+          "qps_achievement_rate": 0.9963054332289054,
+          "average_response_time_ms": 1.0750040722390015,
+          "p95_response_time_ms": 1.37064135633409,
+          "p99_response_time_ms": 1.503898431546986,
+          "meets_target": true,
+          "success_rate": 1.0
+        }
+      }
+    }
+  },
+  "comparative_analysis": {},
+  "performance_claims_validation": {
+    "layer1_sub_0_1ms": {
+      "claim": "Layer 1 exact matching <0.1ms",
+      "target": 0.1,
+      "achieved": 0.00016858265735208988,
+      "passed": "True",
+      "margin": 0.09983141734264792,
+      "confidence": "high"
+    },
+    "layer2_sub_5ms": {
+      "claim": "Layer 2 similarity search <5ms",
+      "target": 5.0,
+      "achieved": 1.011487659998238,
+      "passed": "True",
+      "margin": 3.988512340001762,
+      "confidence": "high"
+    },
+    "layer3_sub_20ms": {
+      "claim": "Layer 3 associative search <20ms",
+      "target": 20.0,
+      "achieved": 0.7771258242428303,
+      "passed": "True",
+      "margin": 19.22287417575717,
+      "confidence": "medium"
+    },
+    "capacity_50m_memories": {
+      "claim": "50M+ memory capacity",
+      "target": 50000000,
+      "achieved": 1000,
+      "passed": false,
+      "extrapolated": true,
+      "confidence": "medium"
+    },
+    "throughput_1000_qps": {
+      "claim": "1000+ queries per second sustained",
+      "target": 1000.0,
+      "achieved": 99.63054332289055,
+      "passed": false,
+      "margin": -900.3694566771095,
+      "confidence": "high"
+    }
+  },
+  "recommendations": [
+    "Implement comprehensive caching strategy across all layers",
+    "Add performance monitoring and alerting systems",
+    "Consider implementing query result pre-computation for common patterns",
+    "Evaluate hardware scaling options for production deployment"
+  ]
+}

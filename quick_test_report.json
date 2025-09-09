@@ -1,0 +1,80 @@
+{
+  "test_configuration": {
+    "test_size": 100,
+    "stress_test": false,
+    "target_capacity": 50000,
+    "output": "quick_test_report.json"
+  },
+  "performance_report": {
+    "timestamp": "2025-09-08T02:33:57.533607",
+    "summary": {
+      "total_tests": 300,
+      "successful_tests": 297,
+      "success_rate": 0.99,
+      "overall_accuracy": 0.9463111764997361
+    },
+    "layer_performance": {
+      "layer_1": {
+        "test_count": 210,
+        "avg_response_time_ms": 0.013311606432710375,
+        "min_response_time_ms": 0.012724194675683975,
+        "max_response_time_ms": 0.02240203320980072,
+        "p95_response_time_ms": 0.0136346323415637,
+        "p99_response_time_ms": 0.020390208810567856,
+        "avg_accuracy": 1.0,
+        "min_accuracy": 1.0,
+        "max_accuracy": 1.0
+      },
+      "layer_2": {
+        "test_count": 30,
+        "avg_response_time_ms": 2.006531056637565,
+        "min_response_time_ms": 2.003239933401346,
+        "max_response_time_ms": 2.0158030092716217,
+        "p95_response_time_ms": 2.014274778775871,
+        "p99_response_time_ms": 2.0154225965961814,
+        "avg_accuracy": 0.9151473140140539,
+        "min_accuracy": 0.8505823892826151,
+        "max_accuracy": 0.9749439741970826
+      },
+      "layer_3": {
+        "test_count": 57,
+        "avg_response_time_ms": 74.92884665956362,
+        "min_response_time_ms": 0.5252608098089695,
+        "max_response_time_ms": 3514.180487021804,
+        "p95_response_time_ms": 100.6946203298865,
+        "p99_response_time_ms": 1811.9356383010677,
+        "avg_accuracy": 0.7649122807017544,
+        "min_accuracy": 0.0,
+        "max_accuracy": 1.0
+      }
+    },
+    "performance_claims_validation": {
+      "layer1_sub_0_1ms": {
+        "target": 0.1,
+        "achieved": 0.013311606432710375,
+        "passed": "True",
+        "margin": 0.08668839356728963
+      },
+      "layer2_sub_5ms": {
+        "target": 5.0,
+        "achieved": 2.006531056637565,
+        "passed": "True",
+        "margin": 2.993468943362435
+      },
+      "layer3_sub_20ms": {
+        "target": 20.0,
+        "achieved": 74.92884665956362,
+        "passed": "False",
+        "margin": -54.92884665956362
+      },
+      "accuracy_94_percent": {
+        "target": 0.94,
+        "achieved": 0.9463111764997361,
+        "passed": "True",
+        "margin": 0.006311176499736115
+      }
+    }
+  },
+  "stress_test_results": {},
+  "raw_results_count": 300
+}

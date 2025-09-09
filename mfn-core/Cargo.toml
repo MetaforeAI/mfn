@@ -1,0 +1,62 @@
+[package]
+name = "mfn-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["The Agency Institute"]
+license = "MIT"
+description = "Core interfaces and orchestration for Memory Flow Network (MFN) system"
+homepage = "https://github.com/TheAgencyInstitute/mfn-core"
+repository = "https://github.com/TheAgencyInstitute/mfn-core"
+documentation = "https://docs.rs/mfn-core"
+keywords = ["memory", "neural-networks", "ai", "graph", "search"]
+categories = ["data-structures", "algorithms", "science"]
+readme = "README.md"
+
+[dependencies]
+# Async support
+async-trait = "0.1.77"
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+
+# Logging
+log = "0.4"
+
+# Hashing (optional, for utilities)
+ahash = { version = "0.8", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+env_logger = "0.10"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = ["utilities"]
+
+# Enable utility functions that require additional dependencies
+utilities = ["ahash"]
+
+# Enable performance benchmarks
+bench = []
+
+# Enable detailed logging and debugging
+debug = []
+
+# Benchmarks can be added later
+# [[bench]]
+# name = "memory_operations"
+# harness = false
+# required-features = ["bench"]
+
+[lib]
+name = "mfn_core"
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

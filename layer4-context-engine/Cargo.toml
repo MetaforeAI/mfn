@@ -1,0 +1,23 @@
+[package]
+name = "layer4-context-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mfn-core = { path = "../mfn-core" }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+parking_lot = "0.12"
+rand = "0.8"
+uuid = { version = "1.0", features = ["v4"] }
+anyhow = "1.0"
+
+[lib]
+name = "layer4_context_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "layer4-socket-server"
+path = "src/main.rs"

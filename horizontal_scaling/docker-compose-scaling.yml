@@ -1,0 +1,234 @@
+version: '3.8'
+
+services:
+  # Load Balancer
+  mfn-load-balancer:
+    build: 
+      context: .
+      dockerfile: Dockerfile.loadbalancer
+    ports:
+      - "8080:8080"  # Main load balancer port
+      - "9090:9090"  # Metrics port
+    environment:
+      - LB_STRATEGY=least_response_time
+      - LB_HEALTH_CHECK_INTERVAL=5
+      - LB_MAX_CONNECTIONS_PER_INSTANCE=100
+      - LB_ENABLE_STICKY_SESSIONS=false
+    depends_on:
+      - mfn-instance-1
+      - mfn-instance-2
+      - mfn-instance-3
+      - mfn-instance-4
+    volumes:
+      - ./config:/app/config
+    networks:
+      - mfn-network
+    restart: unless-stopped
+
+  # MFN Instance 1
+  mfn-instance-1:
+    build:
+      context: ../
+      dockerfile: Dockerfile.mfn
+    ports:
+      - "8082:8082"  # Layer 3 ALM
+      - "9092:9092"  # Metrics
+    environment:
+      - INSTANCE_ID=mfn-1
+      - LAYER3_PORT=8082
+      - METRICS_PORT=9092
+      - MAX_CONNECTIONS=200
+      - ENABLE_OPTIMIZATIONS=true
+      - POPULATE_TEST_DATA=true
+    volumes:
+      - mfn1-data:/data
+      - ./config/instance1.yml:/app/config.yml
+    networks:
+      - mfn-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # MFN Instance 2
+  mfn-instance-2:
+    build:
+      context: ../
+      dockerfile: Dockerfile.mfn
+    ports:
+      - "8083:8082"  # Layer 3 ALM
+      - "9093:9092"  # Metrics
+    environment:
+      - INSTANCE_ID=mfn-2
+      - LAYER3_PORT=8082
+      - METRICS_PORT=9092
+      - MAX_CONNECTIONS=200
+      - ENABLE_OPTIMIZATIONS=true
+      - POPULATE_TEST_DATA=true
+    volumes:
+      - mfn2-data:/data
+      - ./config/instance2.yml:/app/config.yml
+    networks:
+      - mfn-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # MFN Instance 3
+  mfn-instance-3:
+    build:
+      context: ../
+      dockerfile: Dockerfile.mfn
+    ports:
+      - "8084:8082"  # Layer 3 ALM
+      - "9094:9092"  # Metrics
+    environment:
+      - INSTANCE_ID=mfn-3
+      - LAYER3_PORT=8082
+      - METRICS_PORT=9092
+      - MAX_CONNECTIONS=200
+      - ENABLE_OPTIMIZATIONS=true
+      - POPULATE_TEST_DATA=true
+    volumes:
+      - mfn3-data:/data
+      - ./config/instance3.yml:/app/config.yml
+    networks:
+      - mfn-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # MFN Instance 4
+  mfn-instance-4:
+    build:
+      context: ../
+      dockerfile: Dockerfile.mfn
+    ports:
+      - "8085:8082"  # Layer 3 ALM
+      - "9095:9092"  # Metrics
+    environment:
+      - INSTANCE_ID=mfn-4
+      - LAYER3_PORT=8082
+      - METRICS_PORT=9092
+      - MAX_CONNECTIONS=200
+      - ENABLE_OPTIMIZATIONS=true
+      - POPULATE_TEST_DATA=true
+    volumes:
+      - mfn4-data:/data
+      - ./config/instance4.yml:/app/config.yml
+    networks:
+      - mfn-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # Redis for shared state (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - mfn-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - mfn-network
+    restart: unless-stopped
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - mfn-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # Load testing service
+  load-tester:
+    build:
+      context: .
+      dockerfile: Dockerfile.loadtester
+    environment:
+      - TARGET_URL=http://mfn-load-balancer:8080
+      - TARGET_QPS=1000
+      - TEST_DURATION=300
+      - WARMUP_DURATION=30
+    volumes:
+      - ./results:/app/results
+    networks:
+      - mfn-network
+    profiles:
+      - testing
+    depends_on:
+      - mfn-load-balancer
+
+volumes:
+  mfn1-data:
+  mfn2-data:
+  mfn3-data:
+  mfn4-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  mfn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,63 @@
+{
+  "test_configuration": {
+    "test_size": 1000,
+    "stress_test": false,
+    "target_capacity": 50000,
+    "output": "final_validation_report.json"
+  },
+  "performance_report": {
+    "timestamp": "2025-09-08T04:11:33.257865",
+    "summary": {
+      "total_tests": 2220,
+      "successful_tests": 2160,
+      "success_rate": 0.972972972972973,
+      "overall_accuracy": 0.9981352264954778
+    },
+    "layer_performance": {
+      "layer_1": {
+        "test_count": 2110,
+        "avg_response_time_ms": 0.013308118040104048,
+        "min_response_time_ms": 0.01288391649723053,
+        "max_response_time_ms": 0.028063077479600906,
+        "p95_response_time_ms": 0.013475771993398666,
+        "p99_response_time_ms": 0.016962257213890507,
+        "avg_accuracy": 1.0,
+        "min_accuracy": 1.0,
+        "max_accuracy": 1.0
+      },
+      "layer_2": {
+        "test_count": 50,
+        "avg_response_time_ms": 2.0073946565389633,
+        "min_response_time_ms": 2.0032301545143127,
+        "max_response_time_ms": 2.015783917158842,
+        "p95_response_time_ms": 2.0150864962488413,
+        "p99_response_time_ms": 2.0155429653823376,
+        "avg_accuracy": 0.9194417846046433,
+        "min_accuracy": 0.8521687465788185,
+        "max_accuracy": 0.979339482464303
+      }
+    },
+    "performance_claims_validation": {
+      "layer1_sub_0_1ms": {
+        "target": 0.1,
+        "achieved": 0.013308118040104048,
+        "passed": "True",
+        "margin": 0.08669188195989595
+      },
+      "layer2_sub_5ms": {
+        "target": 5.0,
+        "achieved": 2.0073946565389633,
+        "passed": "True",
+        "margin": 2.9926053434610367
+      },
+      "accuracy_94_percent": {
+        "target": 0.94,
+        "achieved": 0.9981352264954778,
+        "passed": "True",
+        "margin": 0.058135226495477865
+      }
+    }
+  },
+  "stress_test_results": {},
+  "raw_results_count": 2220
+}
