@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2200" viewBox="0 0 1600 2200">
+  <defs>
+    <!-- Gradients for layers -->
+    <linearGradient id="layer1Gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#357ABD;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="layer2Gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7B68EE;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#5B48CC;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="layer3Gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#50C878;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#3DA858;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="layer4Gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B6B;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#DD4B4B;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="orchestratorGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFD700;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#DDBB00;stop-opacity:0.9" />
+    </linearGradient>
+
+    <!-- Patterns for data flow -->
+    <pattern id="memoryFlowPattern" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="5" cy="5" r="2" fill="#666" opacity="0.3"/>
+      <circle cx="15" cy="15" r="2" fill="#666" opacity="0.3"/>
+    </pattern>
+
+    <!-- Arrow markers -->
+    <marker id="arrowhead" markerWidth="10" markerHeight="7"
+            refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333" />
+    </marker>
+    <marker id="arrowheadRed" markerWidth="10" markerHeight="7"
+            refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#E74C3C" />
+    </marker>
+    <marker id="arrowheadGreen" markerWidth="10" markerHeight="7"
+            refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#27AE60" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1600" height="2200" fill="#F8F9FA"/>
+
+  <!-- Title and Description -->
+  <text x="800" y="40" font-family="Arial, sans-serif" font-size="32" font-weight="bold"
+        text-anchor="middle" fill="#2C3E50">
+    Telepathy Memory Flow Network (MFN) System Architecture
+  </text>
+  <text x="800" y="70" font-family="Arial, sans-serif" font-size="16"
+        text-anchor="middle" fill="#7F8C8D">
+    Novel Packet-Based Memory Processing with 4-Layer Cognitive Architecture
+  </text>
+
+  <!-- Main System Container -->
+  <rect x="50" y="100" width="1500" height="1950" rx="10" ry="10"
+        fill="none" stroke="#34495E" stroke-width="2" stroke-dasharray="5,5"/>
+
+  <!-- MFN Orchestrator -->
+  <g id="orchestrator">
+    <rect x="100" y="120" width="1400" height="180" rx="8" ry="8"
+          fill="url(#orchestratorGradient)" stroke="#BFA000" stroke-width="2"/>
+    <text x="800" y="155" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
+          text-anchor="middle" fill="#2C3E50">MFN Orchestrator (Rust)</text>
+    <text x="800" y="180" font-family="Arial, sans-serif" font-size="14"
+          text-anchor="middle" fill="#555">Central Coordination & Memory Flow Management</text>
+
+    <!-- Orchestrator Components -->
+    <rect x="150" y="200" width="200" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
+    <text x="250" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Routing Engine</text>
+    <text x="250" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Sequential</text>
+    <text x="250" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Parallel</text>
+    <text x="250" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Adaptive</text>
+
+    <rect x="380" y="200" width="200" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
+    <text x="480" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Flow Control</text>
+    <text x="480" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Timeout: 10ms/layer</text>
+    <text x="480" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Confidence: 0.9</text>
+    <text x="480" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Max Layers: 4</text>
+
+    <rect x="610" y="200" width="200" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
+    <text x="710" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Performance Monitor</text>
+    <text x="710" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Query Tracking</text>
+    <text x="710" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Layer Stats</text>
+    <text x="710" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Health Checks</text>
+
+    <rect x="840" y="200" width="200" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
+    <text x="940" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Memory Packets</text>
+    <text x="940" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• UniversalMemory</text>
+    <text x="940" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• UniversalAssociation</text>
+    <text x="940" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• SearchQuery</text>
+
+    <rect x="1070" y="200" width="200" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
+    <text x="1170" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Layer Registry</text>
+    <text x="1170" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Dynamic Loading</text>
+    <text x="1170" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Health Monitoring</text>
+    <text x="1170" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Graceful Shutdown</text>
+
+    <rect x="1300" y="200" width="150" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
+    <text x="1375" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Unix Sockets</text>
+    <text x="1375" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Binary Protocol</text>
+    <text x="1375" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• < 1ms latency</text>
+    <text x="1375" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Async I/O</text>
+  </g>
+
+  <!-- Layer 1: IFR (Zig) -->
+  <g id="layer1">
+    <rect x="100" y="350" width="1400" height="300" rx="8" ry="8"
+          fill="url(#layer1Gradient)" stroke="#357ABD" stroke-width="2"/>
+    <text x="800" y="385" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
+          text-anchor="middle" fill="white">Layer 1: IFR - Instantaneous Feature Recognition (Zig)</text>
+    <text x="800" y="410" font-family="Arial, sans-serif" font-size="14"
+          text-anchor="middle" fill="#E8F4FF">Ultra-Fast Exact Match Detection & Hash-Based Indexing</text>
+
+    <!-- Layer 1 Components -->
+    <rect x="150" y="430" width="280" height="180" rx="5" ry="5" fill="#E8F4FF" stroke="#357ABD"/>
+    <text x="290" y="455" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Bloom Filters</text>
+    <text x="290" y="480" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Probabilistic Set</text>
+    <text x="290" y="500" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 1M items capacity</text>
+    <text x="290" y="520" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 0.01 false positive rate</text>
+    <text x="290" y="540" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• MurmurHash3 (128-bit)</text>
+    <text x="290" y="560" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• O(1) lookup</text>
+    <text x="290" y="580" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Performance:</text>
+    <text x="290" y="600" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~10μs per query</text>
+
+    <rect x="460" y="430" width="280" height="180" rx="5" ry="5" fill="#E8F4FF" stroke="#357ABD"/>
+    <text x="600" y="455" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Perfect Hashing</text>
+    <text x="600" y="480" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Minimal PHF</text>
+    <text x="600" y="500" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Dynamic reconstruction</text>
+    <text x="600" y="520" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Collision-free</text>
+    <text x="600" y="540" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Memory efficient</text>
+    <text x="600" y="560" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Load factor: 0.95</text>
+    <text x="600" y="580" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Performance:</text>
+    <text x="600" y="600" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~50μs construction</text>
+
+    <rect x="770" y="430" width="280" height="180" rx="5" ry="5" fill="#E8F4FF" stroke="#357ABD"/>
+    <text x="910" y="455" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Content Indexing</text>
+    <text x="910" y="480" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 64-bit hash keys</text>
+    <text x="910" y="500" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Inverted index</text>
+    <text x="910" y="520" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Tag-based search</text>
+    <text x="910" y="540" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Metadata filtering</text>
+    <text x="910" y="560" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Binary search trees</text>
+    <text x="910" y="580" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Performance:</text>
+    <text x="910" y="600" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~100μs per match</text>
+
+    <rect x="1080" y="430" width="370" height="180" rx="5" ry="5" fill="#E8F4FF" stroke="#357ABD"/>
+    <text x="1265" y="455" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Routing Decision Engine</text>
+    <text x="1265" y="480" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• FoundExact → Immediate return</text>
+    <text x="1265" y="500" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• FoundPartial → Continue search</text>
+    <text x="1265" y="520" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• RouteToLayers → Layer 2+ processing</text>
+    <text x="1265" y="540" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• SearchComplete → Finalize results</text>
+    <text x="1265" y="560" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Confidence scoring</text>
+    <text x="1265" y="580" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">FFI Bridge:</text>
+    <text x="1265" y="600" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">C ABI → Rust/Python/Go</text>
+  </g>
+
+  <!-- Layer 2: DSR (Rust) -->
+  <g id="layer2">
+    <rect x="100" y="700" width="1400" height="300" rx="8" ry="8"
+          fill="url(#layer2Gradient)" stroke="#5B48CC" stroke-width="2"/>
+    <text x="800" y="735" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
+          text-anchor="middle" fill="white">Layer 2: DSR - Dynamic Similarity Recognition (Rust)</text>
+    <text x="800" y="760" font-family="Arial, sans-serif" font-size="14"
+          text-anchor="middle" fill="#F0EFFF">Spiking Neural Network Reservoir Computing with Similarity Wells</text>
+
+    <!-- Layer 2 Components -->
+    <rect x="150" y="780" width="280" height="180" rx="5" ry="5" fill="#F0EFFF" stroke="#5B48CC"/>
+    <text x="290" y="805" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Neural Reservoir</text>
+    <text x="290" y="830" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 1000 neurons</text>
+    <text x="290" y="850" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 80% excitatory</text>
+    <text x="290" y="870" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 20% inhibitory</text>
+    <text x="290" y="890" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Small-world topology</text>
+    <text x="290" y="910" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Leaky integrate-and-fire</text>
+    <text x="290" y="930" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Dynamics:</text>
+    <text x="290" y="950" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">1ms time steps</text>
+
+    <rect x="460" y="780" width="280" height="180" rx="5" ry="5" fill="#F0EFFF" stroke="#5B48CC"/>
+    <text x="600" y="805" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Similarity Wells</text>
+    <text x="600" y="830" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Dynamic attractors</text>
+    <text x="600" y="850" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Competitive dynamics</text>
+    <text x="600" y="870" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Winner-take-all</text>
+    <text x="600" y="890" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Hebbian learning</text>
+    <text x="600" y="910" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Readout weights</text>
+    <text x="600" y="930" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Activation:</text>
+    <text x="600" y="950" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">ReLU threshold</text>
+
+    <rect x="770" y="780" width="280" height="180" rx="5" ry="5" fill="#F0EFFF" stroke="#5B48CC"/>
+    <text x="910" y="805" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Spike Encoding</text>
+    <text x="910" y="830" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Rate coding</text>
+    <text x="910" y="850" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Temporal coding</text>
+    <text x="910" y="870" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Population coding</text>
+    <text x="910" y="890" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Sparse representation</text>
+    <text x="910" y="910" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• 768-dim embeddings</text>
+    <text x="910" y="930" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Compression:</text>
+    <text x="910" y="950" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">10:1 ratio</text>
+
+    <rect x="1080" y="780" width="370" height="180" rx="5" ry="5" fill="#F0EFFF" stroke="#5B48CC"/>
+    <text x="1265" y="805" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Pattern Matching</text>
+    <text x="1265" y="830" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Cosine similarity (embeddings)</text>
+    <text x="1265" y="850" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Reservoir state comparison</text>
+    <text x="1265" y="870" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Temporal integration (100ms)</text>
+    <text x="1265" y="890" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Multi-scale analysis</text>
+    <text x="1265" y="910" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Adaptive thresholds</text>
+    <text x="1265" y="930" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Performance:</text>
+    <text x="1265" y="950" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~500μs per similarity</text>
+  </g>
+
+  <!-- Layer 3: ALM (Go) -->
+  <g id="layer3">
+    <rect x="100" y="1050" width="1400" height="300" rx="8" ry="8"
+          fill="url(#layer3Gradient)" stroke="#3DA858" stroke-width="2"/>
+    <text x="800" y="1085" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
+          text-anchor="middle" fill="white">Layer 3: ALM - Associative Link Memory (Go)</text>
+    <text x="800" y="1110" font-family="Arial, sans-serif" font-size="14"
+          text-anchor="middle" fill="#E8FFF0">Graph-Based Memory Network with Multi-Hop Traversal</text>
+
+    <!-- Layer 3 Components -->
+    <rect x="150" y="1130" width="280" height="180" rx="5" ry="5" fill="#E8FFF0" stroke="#3DA858"/>
+    <text x="290" y="1155" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Graph Structure</text>
+    <text x="290" y="1180" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Nodes: Memories</text>
+    <text x="290" y="1200" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Edges: Associations</text>
+    <text x="290" y="1220" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Bidirectional tracking</text>
+    <text x="290" y="1240" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Weighted connections</text>
+    <text x="290" y="1260" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Max 1M nodes/edges</text>
+    <text x="290" y="1280" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Concurrency:</text>
+    <text x="290" y="1300" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">RWMutex protection</text>
+
+    <rect x="460" y="1130" width="280" height="180" rx="5" ry="5" fill="#E8FFF0" stroke="#3DA858"/>
+    <text x="600" y="1155" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Association Types</text>
+    <text x="600" y="1180" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Semantic</text>
+    <text x="600" y="1200" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Temporal</text>
+    <text x="600" y="1220" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Causal</text>
+    <text x="600" y="1240" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Spatial</text>
+    <text x="600" y="1260" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Hierarchical</text>
+    <text x="600" y="1280" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Weights:</text>
+    <text x="600" y="1300" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">0.0 - 1.0 range</text>
+
+    <rect x="770" y="1130" width="280" height="180" rx="5" ry="5" fill="#E8FFF0" stroke="#3DA858"/>
+    <text x="910" y="1155" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Search Algorithms</text>
+    <text x="910" y="1180" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• BFS (breadth-first)</text>
+    <text x="910" y="1200" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• DFS (depth-first)</text>
+    <text x="910" y="1220" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Dijkstra (weighted)</text>
+    <text x="910" y="1240" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• A* (heuristic)</text>
+    <text x="910" y="1260" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• PageRank scoring</text>
+    <text x="910" y="1280" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Max depth:</text>
+    <text x="910" y="1300" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">3 hops default</text>
+
+    <rect x="1080" y="1130" width="370" height="180" rx="5" ry="5" fill="#E8FFF0" stroke="#3DA858"/>
+    <text x="1265" y="1155" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Optimizations</text>
+    <text x="1265" y="1180" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Memory pools (sync.Pool)</text>
+    <text x="1265" y="1200" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Batch processing</text>
+    <text x="1265" y="1220" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Priority queue (container/heap)</text>
+    <text x="1265" y="1240" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Goroutine workers</text>
+    <text x="1265" y="1260" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Result caching</text>
+    <text x="1265" y="1280" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Performance:</text>
+    <text x="1265" y="1300" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~1ms for 3-hop search</text>
+  </g>
+
+  <!-- Layer 4: CPE (Rust) -->
+  <g id="layer4">
+    <rect x="100" y="1400" width="1400" height="300" rx="8" ry="8"
+          fill="url(#layer4Gradient)" stroke="#DD4B4B" stroke-width="2"/>
+    <text x="800" y="1435" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
+          text-anchor="middle" fill="white">Layer 4: CPE - Context Pattern Engine (Rust)</text>
+    <text x="800" y="1460" font-family="Arial, sans-serif" font-size="14"
+          text-anchor="middle" fill="#FFE8E8">Temporal Pattern Analysis & Predictive Context Modeling</text>
+
+    <!-- Layer 4 Components -->
+    <rect x="150" y="1480" width="280" height="180" rx="5" ry="5" fill="#FFE8E8" stroke="#DD4B4B"/>
+    <text x="290" y="1505" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Temporal Analysis</text>
+    <text x="290" y="1530" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Access sequences</text>
+    <text x="290" y="1550" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Time intervals</text>
+    <text x="290" y="1570" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Pattern detection</text>
+    <text x="290" y="1590" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Sliding window: 10K</text>
+    <text x="290" y="1610" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Decay rate: 0.1/hour</text>
+    <text x="290" y="1630" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Window:</text>
+    <text x="290" y="1650" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">60s max gap</text>
+
+    <rect x="460" y="1480" width="280" height="180" rx="5" ry="5" fill="#FFE8E8" stroke="#DD4B4B"/>
+    <text x="600" y="1505" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Pattern Types</text>
+    <text x="600" y="1530" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Exact sequences</text>
+    <text x="600" y="1550" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Approximate patterns</text>
+    <text x="600" y="1570" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Periodic cycles</text>
+    <text x="600" y="1590" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Burst detection</text>
+    <text x="600" y="1610" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Session patterns</text>
+    <text x="600" y="1630" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Min occurrences:</text>
+    <text x="600" y="1650" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">3 for significance</text>
+
+    <rect x="770" y="1480" width="280" height="180" rx="5" ry="5" fill="#FFE8E8" stroke="#DD4B4B"/>
+    <text x="910" y="1505" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Prediction Engine</text>
+    <text x="910" y="1530" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• N-gram analysis (1-8)</text>
+    <text x="910" y="1550" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Markov chains</text>
+    <text x="910" y="1570" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Transition matrices</text>
+    <text x="910" y="1590" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Context features</text>
+    <text x="910" y="1610" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Confidence: 0.3 min</text>
+    <text x="910" y="1630" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Accuracy:</text>
+    <text x="910" y="1650" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~75% next-item</text>
+
+    <rect x="1080" y="1480" width="370" height="180" rx="5" ry="5" fill="#FFE8E8" stroke="#DD4B4B"/>
+    <text x="1265" y="1505" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Statistical Models</text>
+    <text x="1265" y="1530" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Interval distributions</text>
+    <text x="1265" y="1550" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Variance analysis</text>
+    <text x="1265" y="1570" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Pattern signatures (hash)</text>
+    <text x="1265" y="1590" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• Context extraction</text>
+    <text x="1265" y="1610" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#444">• ndarray/nalgebra compute</text>
+    <text x="1265" y="1630" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#666">Performance:</text>
+    <text x="1265" y="1650" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#27AE60">~2ms prediction</text>
+  </g>
+
+  <!-- Persistence Layer -->
+  <g id="persistence">
+    <rect x="100" y="1750" width="680" height="250" rx="8" ry="8"
+          fill="#ECF0F1" stroke="#95A5A6" stroke-width="2"/>
+    <text x="440" y="1785" font-family="Arial, sans-serif" font-size="18" font-weight="bold"
+          text-anchor="middle" fill="#2C3E50">Persistence System</text>
+    <text x="440" y="1810" font-family="Arial, sans-serif" font-size="12"
+          text-anchor="middle" fill="#7F8C8D">SQLite Database & Layer State Snapshots</text>
+
+    <rect x="150" y="1830" width="250" height="140" rx="5" ry="5" fill="white" stroke="#95A5A6"/>
+    <text x="275" y="1855" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle">Database Schema</text>
+    <text x="275" y="1875" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• memories (core data)</text>
+    <text x="275" y="1895" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• layer1_hashes</text>
+    <text x="275" y="1915" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• layer2_neural_states</text>
+    <text x="275" y="1935" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• layer3_associations</text>
+    <text x="275" y="1955" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• layer4_temporal_patterns</text>
+
+    <rect x="430" y="1830" width="320" height="140" rx="5" ry="5" fill="white" stroke="#95A5A6"/>
+    <text x="590" y="1855" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle">MFNPersistenceManager</text>
+    <text x="590" y="1875" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Save/Load memories</text>
+    <text x="590" y="1895" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Layer state snapshots</text>
+    <text x="590" y="1915" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Incremental backups</text>
+    <text x="590" y="1935" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• System recovery</text>
+    <text x="590" y="1955" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• JSON/Pickle serialization</text>
+  </g>
+
+  <!-- Communication Infrastructure -->
+  <g id="communication">
+    <rect x="820" y="1750" width="680" height="250" rx="8" ry="8"
+          fill="#FFF5E6" stroke="#F39C12" stroke-width="2"/>
+    <text x="1160" y="1785" font-family="Arial, sans-serif" font-size="18" font-weight="bold"
+          text-anchor="middle" fill="#2C3E50">Communication Infrastructure</text>
+    <text x="1160" y="1810" font-family="Arial, sans-serif" font-size="12"
+          text-anchor="middle" fill="#7F8C8D">High-Performance Inter-Layer Communication</text>
+
+    <rect x="870" y="1830" width="250" height="140" rx="5" ry="5" fill="white" stroke="#F39C12"/>
+    <text x="995" y="1855" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle">Unix Domain Sockets</text>
+    <text x="995" y="1875" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Binary protocol</text>
+    <text x="995" y="1895" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Async I/O (tokio/mio)</text>
+    <text x="995" y="1915" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Zero-copy transfers</text>
+    <text x="995" y="1935" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• &lt; 100μs latency</text>
+    <text x="995" y="1955" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• 1000+ QPS capacity</text>
+
+    <rect x="1150" y="1830" width="320" height="140" rx="5" ry="5" fill="white" stroke="#F39C12"/>
+    <text x="1310" y="1855" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle">FFI Bridges</text>
+    <text x="1310" y="1875" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Zig ↔ Rust (C ABI)</text>
+    <text x="1310" y="1895" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Go ↔ Rust (cgo/cbindgen)</text>
+    <text x="1310" y="1915" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Python ↔ All (ctypes/cffi)</text>
+    <text x="1310" y="1935" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Memory safety guarantees</text>
+    <text x="1310" y="1955" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#555">• Automatic marshalling</text>
+  </g>
+
+  <!-- Memory Flow Arrows -->
+  <g id="memoryFlow">
+    <!-- Sequential Flow -->
+    <path d="M 800 300 L 800 350" stroke="#333" stroke-width="3" marker-end="url(#arrowhead)" stroke-dasharray="5,3" opacity="0.7"/>
+    <path d="M 800 650 L 800 700" stroke="#333" stroke-width="3" marker-end="url(#arrowhead)" stroke-dasharray="5,3" opacity="0.7"/>
+    <path d="M 800 1000 L 800 1050" stroke="#333" stroke-width="3" marker-end="url(#arrowhead)" stroke-dasharray="5,3" opacity="0.7"/>
+    <path d="M 800 1350 L 800 1400" stroke="#333" stroke-width="3" marker-end="url(#arrowhead)" stroke-dasharray="5,3" opacity="0.7"/>
+
+    <!-- Parallel Flow (from Orchestrator) -->
+    <path d="M 400 300 L 290 350" stroke="#E74C3C" stroke-width="2" marker-end="url(#arrowheadRed)" opacity="0.5"/>
+    <path d="M 600 300 L 600 350" stroke="#E74C3C" stroke-width="2" marker-end="url(#arrowheadRed)" opacity="0.5"/>
+    <path d="M 1000 300 L 910 350" stroke="#E74C3C" stroke-width="2" marker-end="url(#arrowheadRed)" opacity="0.5"/>
+    <path d="M 1200 300 L 1265 350" stroke="#E74C3C" stroke-width="2" marker-end="url(#arrowheadRed)" opacity="0.5"/>
+
+    <!-- Feedback paths -->
+    <path d="M 150 500 Q 80 500 80 400 Q 80 320 150 290" stroke="#27AE60" stroke-width="1.5" marker-end="url(#arrowheadGreen)" stroke-dasharray="3,3" opacity="0.4" fill="none"/>
+    <path d="M 150 850 Q 70 850 70 750 Q 70 670 150 640" stroke="#27AE60" stroke-width="1.5" marker-end="url(#arrowheadGreen)" stroke-dasharray="3,3" opacity="0.4" fill="none"/>
+
+    <!-- Persistence connections -->
+    <path d="M 440 1750 L 440 1700" stroke="#95A5A6" stroke-width="2" stroke-dasharray="3,3" opacity="0.6"/>
+    <path d="M 1160 1750 L 1160 1700" stroke="#F39C12" stroke-width="2" stroke-dasharray="3,3" opacity="0.6"/>
+  </g>
+
+  <!-- Performance Metrics Box -->
+  <g id="performanceMetrics">
+    <rect x="1200" y="2070" width="350" height="100" rx="5" ry="5"
+          fill="#E8F6F3" stroke="#27AE60" stroke-width="2"/>
+    <text x="1375" y="2095" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+          text-anchor="middle" fill="#27AE60">System Performance</text>
+    <text x="1375" y="2115" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Layer 1: ~100μs exact match</text>
+    <text x="1375" y="2135" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Layer 2: ~500μs similarity</text>
+    <text x="1375" y="2155" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Layer 3: ~1ms association | Layer 4: ~2ms prediction</text>
+  </g>
+
+  <!-- Novel Innovations Box -->
+  <g id="innovations">
+    <rect x="50" y="2070" width="600" height="100" rx="5" ry="5"
+          fill="#FEF5E7" stroke="#F39C12" stroke-width="2"/>
+    <text x="350" y="2095" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+          text-anchor="middle" fill="#D68910">Novel Architectural Innovations</text>
+    <text x="350" y="2115" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Packet-based memory flow paradigm with routing decisions</text>
+    <text x="350" y="2135" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Spiking neural reservoir with dynamic similarity wells</text>
+    <text x="350" y="2155" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Multi-language integration (Zig/Rust/Go) with sub-ms communication</text>
+  </g>
+
+  <!-- Key Features Box -->
+  <g id="keyFeatures">
+    <rect x="670" y="2070" width="510" height="100" rx="5" ry="5"
+          fill="#EBF5FB" stroke="#3498DB" stroke-width="2"/>
+    <text x="925" y="2095" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+          text-anchor="middle" fill="#2874A6">Key System Features</text>
+    <text x="925" y="2115" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Cognitive-inspired 4-layer architecture</text>
+    <text x="925" y="2135" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Real-time pattern detection &amp; prediction</text>
+    <text x="925" y="2155" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">• Scalable to 1M+ memories with persistence</text>
+  </g>
+</svg>
