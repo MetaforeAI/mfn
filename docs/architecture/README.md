@@ -10,9 +10,9 @@ This directory contains comprehensive architectural documentation for the Memory
 
 ### Visual Diagrams
 - **[mfn-system-diagram.svg](mfn-system-diagram.svg)** - Comprehensive system architecture diagram for technical documentation and patents
-- **[../mfn_system_architecture.svg](../mfn_system_architecture.svg)** - Technical system architecture
-- **[../mfn_patent_architecture.svg](../mfn_patent_architecture.svg)** - Patent-focused architecture diagram
-- **[../mfn_educational_overview.svg](../mfn_educational_overview.svg)** - Educational overview of memory flow
+- **[mfn_system_architecture.svg](mfn_system_architecture.svg)** - Technical system architecture
+- **[mfn_patent_architecture.svg](mfn_patent_architecture.svg)** - Patent-focused architecture diagram
+- **[mfn_educational_overview.svg](mfn_educational_overview.svg)** - Educational overview of memory flow
 
 ## Architecture Overview
 
