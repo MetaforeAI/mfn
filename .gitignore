@@ -122,7 +122,17 @@ telepathy/.claude/
 telepathy/memory/
 telepathy/settings.local.json
 
+# Artifacts directory (new consolidated structure)
+artifacts/
+
 # Test artifacts
 test-results/
 playwright-report/
 test-results
+
+# Security scan cache
+.shamash/
+scanner_cache/
+
+# Backup directories
+backups/

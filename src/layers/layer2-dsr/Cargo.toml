@@ -1,0 +1,79 @@
+[package]
+name = "mfn_layer2_dsr"
+version = "0.1.0"
+edition = "2021"
+authors = ["MFN Team <team@mfn.dev>"]
+description = "Memory Flow Network Layer 2: Dynamic Similarity Reservoir"
+license = "MIT"
+
+[dependencies]
+# Core dependencies
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Numerical computing
+ndarray = "0.15"
+ndarray-rand = "0.14"
+rand = "0.8"
+rand_distr = "0.4"
+
+# Neural network and scientific computing (optional backends)
+# candle = { git = "https://github.com/huggingface/candle.git", optional = true }
+# tch = { version = "0.14", optional = true }
+
+# Performance and concurrency
+rayon = "1.7"
+crossbeam = "0.8"
+parking_lot = "0.12"
+
+# Memory management
+mimalloc = { version = "0.1", default-features = false }
+
+# FFI bindings with other layers
+libc = "0.2"
+
+# Logging and metrics
+tracing = "0.1"
+tracing-subscriber = "0.3"
+metrics = "0.21"
+
+# Unix socket and networking (tokio has built-in Unix socket support)
+uuid = { version = "1.0", features = ["v4"] }
+
+# Binary protocol support
+crc32fast = "1.3"
+lz4_flex = "0.11"
+
+# Development and testing
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[dev-dependencies]
+approx = "0.5"
+proptest = "1.0"
+
+[features]
+default = []
+# candle-backend = ["candle"]
+# torch-backend = ["tch"]
+cuda = []
+rocm = []
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+debug = true
+
+[[bin]]
+name = "layer2_socket_server" 
+path = "src/bin/layer2_socket_server.rs"
+
+# Benchmarks will be added later
+# [[bench]]
+# name = "similarity_search"
+# harness = false
