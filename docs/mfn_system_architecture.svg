@@ -68,7 +68,7 @@
     <text x="800" y="155" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
           text-anchor="middle" fill="#2C3E50">MFN Orchestrator (Rust)</text>
     <text x="800" y="180" font-family="Arial, sans-serif" font-size="14"
-          text-anchor="middle" fill="#555">Central Coordination & Memory Flow Management</text>
+          text-anchor="middle" fill="#555">Central Coordination &amp; Memory Flow Management</text>
 
     <!-- Orchestrator Components -->
     <rect x="150" y="200" width="200" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
@@ -104,7 +104,7 @@
     <rect x="1300" y="200" width="150" height="80" rx="5" ry="5" fill="#FFF5DD" stroke="#BFA000"/>
     <text x="1375" y="225" font-family="Arial, sans-serif" font-size="12" text-anchor="middle">Unix Sockets</text>
     <text x="1375" y="245" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Binary Protocol</text>
-    <text x="1375" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• < 1ms latency</text>
+    <text x="1375" y="260" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• &lt; 1ms latency</text>
     <text x="1375" y="275" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="#666">• Async I/O</text>
   </g>
 
@@ -115,7 +115,7 @@
     <text x="800" y="385" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
           text-anchor="middle" fill="white">Layer 1: IFR - Instantaneous Feature Recognition (Zig)</text>
     <text x="800" y="410" font-family="Arial, sans-serif" font-size="14"
-          text-anchor="middle" fill="#E8F4FF">Ultra-Fast Exact Match Detection & Hash-Based Indexing</text>
+          text-anchor="middle" fill="#E8F4FF">Ultra-Fast Exact Match Detection &amp; Hash-Based Indexing</text>
 
     <!-- Layer 1 Components -->
     <rect x="150" y="430" width="280" height="180" rx="5" ry="5" fill="#E8F4FF" stroke="#357ABD"/>
@@ -268,7 +268,7 @@
     <text x="800" y="1435" font-family="Arial, sans-serif" font-size="20" font-weight="bold"
           text-anchor="middle" fill="white">Layer 4: CPE - Context Pattern Engine (Rust)</text>
     <text x="800" y="1460" font-family="Arial, sans-serif" font-size="14"
-          text-anchor="middle" fill="#FFE8E8">Temporal Pattern Analysis & Predictive Context Modeling</text>
+          text-anchor="middle" fill="#FFE8E8">Temporal Pattern Analysis &amp; Predictive Context Modeling</text>
 
     <!-- Layer 4 Components -->
     <rect x="150" y="1480" width="280" height="180" rx="5" ry="5" fill="#FFE8E8" stroke="#DD4B4B"/>
@@ -319,7 +319,7 @@
     <text x="440" y="1785" font-family="Arial, sans-serif" font-size="18" font-weight="bold"
           text-anchor="middle" fill="#2C3E50">Persistence System</text>
     <text x="440" y="1810" font-family="Arial, sans-serif" font-size="12"
-          text-anchor="middle" fill="#7F8C8D">SQLite Database & Layer State Snapshots</text>
+          text-anchor="middle" fill="#7F8C8D">SQLite Database &amp; Layer State Snapshots</text>
 
     <rect x="150" y="1830" width="250" height="140" rx="5" ry="5" fill="white" stroke="#95A5A6"/>
     <text x="275" y="1855" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle">Database Schema</text>
