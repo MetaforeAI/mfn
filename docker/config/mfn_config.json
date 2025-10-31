@@ -1,0 +1,191 @@
+{
+  "system": {
+    "name": "MFN Production System",
+    "version": "1.0.0",
+    "environment": "production"
+  },
+  "layers": {
+    "layer1": {
+      "name": "Information Flow Regulator",
+      "type": "zig",
+      "socket_path": "/app/sockets/layer1.sock",
+      "config": {
+        "hash_table_size": 1048576,
+        "max_connections": 100,
+        "timeout_ms": 5000
+      }
+    },
+    "layer2": {
+      "name": "Dynamic State Reservoir",
+      "type": "rust",
+      "socket_path": "/app/sockets/layer2.sock",
+      "config": {
+        "reservoir_size": 10000,
+        "input_dim": 768,
+        "spectral_radius": 0.9,
+        "sparsity": 0.1
+      }
+    },
+    "layer3": {
+      "name": "Associative Learning Matrix",
+      "type": "go",
+      "socket_path": "/app/sockets/layer3.sock",
+      "config": {
+        "max_associations": 1000,
+        "learning_rate": 0.01,
+        "similarity_threshold": 0.7
+      }
+    },
+    "layer4": {
+      "name": "Context Prediction Engine",
+      "type": "rust",
+      "socket_path": "/app/sockets/layer4.sock",
+      "config": {
+        "context_window": 100,
+        "prediction_horizon": 10,
+        "temperature": 0.8
+      }
+    }
+  },
+  "orchestrator": {
+    "parallel_execution": true,
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "recovery_timeout": 60,
+      "half_open_requests": 3
+    },
+    "retry": {
+      "max_attempts": 3,
+      "base_delay_ms": 1000,
+      "max_delay_ms": 30000,
+      "exponential_base": 2
+    }
+  },
+  "persistence": {
+    "enabled": true,
+    "auto_backup": {
+      "enabled": true,
+      "interval_hours": 6,
+      "retention_days": 7,
+      "max_backups": 28
+    },
+    "checkpoint": {
+      "enabled": true,
+      "interval_minutes": 5
+    },
+    "database": {
+      "path": "/app/data/mfn_memories.db",
+      "wal_mode": true,
+      "cache_size_kb": 8192,
+      "page_size": 4096
+    }
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "rate_limiting": {
+      "enabled": true,
+      "requests_per_minute": 100,
+      "burst_size": 20
+    },
+    "cors": {
+      "enabled": true,
+      "allowed_origins": ["*"],
+      "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      "allowed_headers": ["*"]
+    },
+    "compression": {
+      "enabled": true,
+      "level": 6
+    }
+  },
+  "monitoring": {
+    "metrics": {
+      "enabled": true,
+      "port": 9090,
+      "path": "/metrics",
+      "collection_interval": 15
+    },
+    "health_check": {
+      "enabled": true,
+      "interval_seconds": 30,
+      "timeout_seconds": 10,
+      "failure_threshold": 3
+    },
+    "logging": {
+      "level": "info",
+      "format": "json",
+      "output": "/app/logs",
+      "rotation": {
+        "enabled": true,
+        "max_size_mb": 100,
+        "max_files": 10,
+        "compress": true
+      }
+    }
+  },
+  "dashboard": {
+    "enabled": true,
+    "port": 3000,
+    "update_interval": 2000,
+    "auth": {
+      "enabled": "${MFN_DASHBOARD_AUTH_ENABLED:-false}",
+      "username": "${MFN_DASHBOARD_USERNAME:-admin}",
+      "password_hash": "${MFN_DASHBOARD_PASSWORD_HASH:-}"
+    }
+  },
+  "security": {
+    "tls": {
+      "enabled": false,
+      "cert_path": "/app/config/certs/server.crt",
+      "key_path": "/app/config/certs/server.key"
+    },
+    "authentication": {
+      "enabled": false,
+      "type": "bearer",
+      "token_expiry": 3600
+    },
+    "encryption": {
+      "at_rest": false,
+      "in_transit": false
+    }
+  },
+  "performance": {
+    "threading": {
+      "worker_threads": 4,
+      "io_threads": 2,
+      "max_connections": 1000
+    },
+    "caching": {
+      "enabled": true,
+      "ttl_seconds": 300,
+      "max_entries": 10000
+    },
+    "batching": {
+      "enabled": true,
+      "batch_size": 100,
+      "batch_timeout_ms": 100
+    }
+  },
+  "alerts": {
+    "enabled": false,
+    "endpoints": [],
+    "rules": [
+      {
+        "name": "high_error_rate",
+        "condition": "error_rate > 0.1",
+        "severity": "critical"
+      },
+      {
+        "name": "layer_down",
+        "condition": "layer_status == 0",
+        "severity": "critical"
+      },
+      {
+        "name": "high_memory",
+        "condition": "memory_percent > 85",
+        "severity": "warning"
+      }
+    ]
+  }
+}
