@@ -70,10 +70,9 @@ panic = "abort"
 debug = true
 
 [[bin]]
-name = "layer2_socket_server" 
+name = "layer2_socket_server"
 path = "src/bin/layer2_socket_server.rs"
 
-# Benchmarks will be added later
-# [[bench]]
-# name = "similarity_search"
-# harness = false
+[[bench]]
+name = "similarity_benchmark"
+harness = false

@@ -60,18 +60,14 @@ impl SimilarityMatcher {
     /// Find similar memories using competitive dynamics
     pub async fn find_similar(
         &self,
-        reservoir: &SimilarityReservoir,
+        reservoir: &mut SimilarityReservoir,
         query_pattern: &SpikePattern,
         top_k: usize,
     ) -> Result<SimilarityResults> {
         let start_time = std::time::Instant::now();
 
         // Process query through reservoir to get raw activations
-        let raw_activations = {
-            // Note: In a real implementation, we'd need mutable access or a different approach
-            // For now, we'll simulate the processing
-            self.simulate_reservoir_processing(reservoir, query_pattern).await?
-        };
+        let raw_activations = reservoir.process_pattern(query_pattern)?;
 
         // Apply competitive dynamics
         let competitive_activations = self.apply_competitive_dynamics(&raw_activations)?;
@@ -99,44 +95,6 @@ impl SimilarityMatcher {
             wells_evaluated: raw_activations.len(),
             has_confident_matches,
         })
-    }
-
-    /// Simulate reservoir processing (placeholder for actual reservoir mutation)
-    async fn simulate_reservoir_processing(
-        &self,
-        reservoir: &SimilarityReservoir,
-        query_pattern: &SpikePattern,
-    ) -> Result<HashMap<MemoryId, f32>> {
-        // In a real implementation, this would call reservoir.process_pattern()
-        // For now, we'll simulate activations based on pattern similarity
-        
-        let mut activations = HashMap::new();
-        
-        // Get all wells and simulate their activations
-        for memory_id in reservoir.get_memory_ids() {
-            if let Some(well) = reservoir.get_well(&memory_id) {
-                // Simple pattern similarity based on spike count difference
-                let query_spike_count = query_pattern.total_spike_count() as f32;
-                let reference_spike_count = well.reference_pattern.total_spike_count() as f32;
-                
-                // Simulate reservoir dynamics with some randomness
-                let base_similarity = 1.0 - (query_spike_count - reference_spike_count).abs() / 
-                    (query_spike_count + reference_spike_count + 1.0);
-                
-                // Add noise to simulate reservoir dynamics
-                let mut rng = rand::thread_rng();
-                use rand::Rng;
-                let noise = (rng.gen::<f32>() - 0.5) * 0.2;
-                let activation = (base_similarity + noise).clamp(0.0, 1.0);
-                
-                activations.insert(memory_id, activation);
-            }
-        }
-
-        // Simulate async processing delay
-        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-
-        Ok(activations)
     }
 
     /// Apply competitive winner-take-all dynamics to raw activations

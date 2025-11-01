@@ -1,17 +1,8 @@
-#!/usr/bin/env cargo
-/*
-[dependencies]
-mfn_layer2_dsr = { path = ".." }
-tokio = { version = "1.0", features = ["full"] }
-serde_json = "1.0"
-anyhow = "1.0"
-*/
-
 //! Layer 2 DSR Socket Server
 //! High-performance Unix socket server for Dynamic Similarity Reservoir
 
 use std::sync::Arc;
-use mfn_layer2_dsr::{DynamicSimilarityReservoir, DSRConfig, SocketServer, SocketServerConfig};
+use mfn_layer2_dsr::{DynamicSimilarityReservoir, DSRConfig, socket_server::{SocketServer, SocketServerConfig}};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,11 +14,11 @@ async fn main() -> anyhow::Result<()> {
     println!("🧠 Starting Layer 2 DSR Socket Server");
     println!("🎯 Target: <2ms similarity search latency");
     println!("🔗 Socket: /tmp/mfn_layer2.sock");
-    
-    // Create DSR instance
-    let dsr_config = DSRConfig::default();
-    let dsr = Arc::new(DynamicSimilarityReservoir::new(dsr_config)?);
-    
+
+    // Create DSR instance with config
+    let config = DSRConfig::default();
+    let dsr = Arc::new(DynamicSimilarityReservoir::new(config)?);
+
     // Create server configuration
     let config = SocketServerConfig {
         socket_path: "/tmp/mfn_layer2.sock".to_string(),

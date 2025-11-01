@@ -5,10 +5,11 @@ use mfn_core::{
     MfnLayer, LayerId, LayerResult, LayerError, LayerConfig, LayerHealth, LayerPerformance,
     HealthStatus, ResourceUsage, RoutingDecision, UniversalMemory, UniversalAssociation,
     UniversalSearchQuery, UniversalSearchResult, MemoryId, Weight, current_timestamp,
-    ContextPredictionEngine, ContextWindow, MemoryAccess as CoreMemoryAccess, TemporalPattern as CoreTemporalPattern,
+    ContextPredictionEngine, ContextWindow, MemoryAccess as CoreMemoryAccess,
     PredictionResult as CorePredictionResult, PredictionType as CorePredictionType, ContextState,
 };
 use mfn_core::memory_types::Timestamp;
+use mfn_core::layer_interface::AccessType as CoreAccessType;
 
 use crate::temporal::{
     TemporalAnalyzer, TemporalConfig, MemoryAccess, AccessType, PredictionContext, 
@@ -301,7 +302,7 @@ impl ContextPredictionLayer {
 
     /// Update prediction accuracy based on actual access
     async fn update_accuracy(&self, predicted: MemoryId, actual: MemoryId) {
-        let mut metrics = self.performance_metrics.write().unwrap();
+        let mut metrics = self.performance_metrics.write();
         
         // Simple accuracy tracking
         let was_correct = predicted == actual;
@@ -324,7 +325,7 @@ impl ContextPredictionLayer {
 
     /// Clean expired cache entries
     async fn cleanup_cache(&self) {
-        let mut cache = self.prediction_cache.write().unwrap();
+        let mut cache = self.prediction_cache.write();
         let current_time = current_timestamp();
         
         cache.retain(|_, cached| {
@@ -362,7 +363,7 @@ impl MfnLayer for ContextPredictionLayer {
         analyzer.add_access(access);
 
         // Update context window
-        let mut window = self.context_window.write().unwrap();
+        let mut window = self.context_window.write();
         window.push_back(CoreMemoryAccess {
             memory_id: memory.id,
             access_type: CoreAccessType::Write,
@@ -469,7 +470,7 @@ impl MfnLayer for ContextPredictionLayer {
 
         // Update performance metrics
         {
-            let mut metrics = self.performance_metrics.write().unwrap();
+            let mut metrics = self.performance_metrics.write();
             metrics.predictions_made += results.len() as u64;
             let search_time = current_timestamp() - start_time;
             metrics.average_prediction_time_us = 
@@ -488,7 +489,7 @@ impl MfnLayer for ContextPredictionLayer {
     }
 
     async fn get_performance(&self) -> LayerResult<LayerPerformance> {
-        let metrics = self.performance_metrics.read().unwrap();
+        let metrics = self.performance_metrics.read();
         let analyzer = self.analyzer.lock().await;
         let stats = analyzer.get_statistics();
         drop(analyzer);
@@ -512,7 +513,7 @@ impl MfnLayer for ContextPredictionLayer {
     }
 
     async fn health_check(&self) -> LayerResult<LayerHealth> {
-        let mut health = self.health_status.write().unwrap();
+        let mut health = self.health_status.write();
         
         // Update diagnostics
         let analyzer = self.analyzer.lock().await;
@@ -525,7 +526,7 @@ impl MfnLayer for ContextPredictionLayer {
             serde_json::Value::Number(serde_json::Number::from(stats.active_matches)));
 
         // Update resource usage
-        let metrics = self.performance_metrics.read().unwrap();
+        let metrics = self.performance_metrics.read();
         health.resource_usage.memory_bytes = stats.memory_usage_estimate as u64;
         health.resource_usage.active_connections = metrics.active_sessions as u32;
         
@@ -546,7 +547,7 @@ impl MfnLayer for ContextPredictionLayer {
         
         // Update health status
         {
-            let mut health = self.health_status.write().unwrap();
+            let mut health = self.health_status.write();
             health.status = HealthStatus::Healthy;
         }
 
@@ -557,7 +558,7 @@ impl MfnLayer for ContextPredictionLayer {
     async fn shutdown(&mut self) -> LayerResult<()> {
         // Update health status
         {
-            let mut health = self.health_status.write().unwrap();
+            let mut health = self.health_status.write();
             health.status = HealthStatus::Stopping;
         }
 
@@ -580,12 +581,12 @@ impl ContextPredictionEngine for ContextPredictionLayer {
         let cache_key = format!("ctx_{}", context_hash);
         
         {
-            let cache = self.prediction_cache.read().unwrap();
+            let cache = self.prediction_cache.read();
             if let Some(cached) = cache.get(&cache_key) {
                 let age = current_timestamp().saturating_sub(cached.timestamp);
                 if age < cached.ttl_us {
                     // Update cache hit rate
-                    let mut metrics = self.performance_metrics.write().unwrap();
+                    let mut metrics = self.performance_metrics.write();
                     metrics.cache_hit_rate = (metrics.cache_hit_rate + 1.0) / 2.0;
                     
                     return Ok(cached.predictions.clone());
@@ -621,7 +622,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
 
         // Cache results
         {
-            let mut cache = self.prediction_cache.write().unwrap();
+            let mut cache = self.prediction_cache.write();
             cache.insert(cache_key, CachedPrediction {
                 predictions: core_predictions.clone(),
                 timestamp: current_timestamp(),
@@ -632,7 +633,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
 
         // Update performance metrics
         {
-            let mut metrics = self.performance_metrics.write().unwrap();
+            let mut metrics = self.performance_metrics.write();
             metrics.predictions_made += core_predictions.len() as u64;
             let prediction_time = current_timestamp() - start_time;
             metrics.average_prediction_time_us = 
@@ -658,8 +659,10 @@ impl ContextPredictionEngine for ContextPredictionLayer {
                 memory_id: access.memory_id,
                 timestamp: access.timestamp,
                 access_type: AccessType::Read, // Default access type
-                user_context: access.context_metadata.get("user_context").cloned(),
-                session_id: access.context_metadata.get("session_id").cloned(),
+                user_context: access.context_metadata.get("user_context")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                session_id: access.context_metadata.get("session_id")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
                 confidence: 1.0,
             };
 
@@ -669,7 +672,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
 
         // Update performance metrics
         {
-            let mut metrics = self.performance_metrics.write().unwrap();
+            let mut metrics = self.performance_metrics.write();
             let analyzer = self.analyzer.lock().await;
             let stats = analyzer.get_statistics();
             metrics.patterns_detected = stats.total_patterns as u64;
@@ -681,7 +684,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
     async fn get_context_state(&self) -> LayerResult<ContextState> {
         let analyzer = self.analyzer.lock().await;
         let stats = analyzer.get_statistics();
-        let metrics = self.performance_metrics.read().unwrap();
+        let metrics = self.performance_metrics.read();
 
         Ok(ContextState {
             active_patterns: stats.total_patterns,
@@ -697,8 +700,10 @@ impl ContextPredictionEngine for ContextPredictionLayer {
             memory_id: access.memory_id,
             timestamp: access.timestamp,
             access_type: AccessType::Read, // Default access type
-            user_context: access.context_metadata.get("user_context").cloned(),
-            session_id: access.context_metadata.get("session_id").cloned(),
+            user_context: access.context_metadata.get("user_context")
+                .and_then(|v| v.as_str().map(|s| s.to_string())),
+            session_id: access.context_metadata.get("session_id")
+                .and_then(|v| v.as_str().map(|s| s.to_string())),
             confidence: 1.0,
         };
 
@@ -706,7 +711,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
         analyzer.add_access(internal_access);
 
         // Update context window
-        let mut window = self.context_window.write().unwrap();
+        let mut window = self.context_window.write();
         window.push_back(access);
 
         // Maintain window size
@@ -721,17 +726,17 @@ impl ContextPredictionEngine for ContextPredictionLayer {
 impl ContextPredictionLayer {
     /// Get performance metrics
     pub async fn get_performance(&self) -> LayerResult<ContextPredictionPerformance> {
-        let metrics = self.performance_metrics.read().unwrap();
+        let metrics = self.performance_metrics.read();
         let analyzer = self.analyzer.lock().await;
         let stats = analyzer.get_statistics();
 
         Ok(ContextPredictionPerformance {
-            predictions_generated: metrics.predictions_generated,
-            cache_hit_rate: metrics.cache_hit_rate,
-            accuracy_rate: metrics.accuracy_rate,
+            predictions_generated: metrics.predictions_made,
+            cache_hit_rate: metrics.cache_hit_rate as f32,
+            accuracy_rate: metrics.accuracy_rate as f32,
             average_prediction_time_ms: metrics.average_prediction_time_us as f32 / 1000.0,
             patterns_detected: stats.total_patterns as u64,
-            context_window_utilization: (stats.total_accesses as f32 / self.config.max_window_size as f32).min(1.0),
+            context_window_utilization: (stats.total_accesses as f32 / 1000.0).min(1.0),
         })
     }
 
@@ -739,11 +744,11 @@ impl ContextPredictionLayer {
     pub async fn clear_temporal_state(&mut self) -> LayerResult<()> {
         let mut analyzer = self.analyzer.lock().await;
         analyzer.clear_all_patterns();
-        
-        let mut cache = self.prediction_cache.write().unwrap();
+
+        let mut cache = self.prediction_cache.write();
         cache.clear();
-        
-        let mut window = self.context_window.write().unwrap();
+
+        let mut window = self.context_window.write();
         window.clear();
 
         Ok(())
@@ -751,23 +756,26 @@ impl ContextPredictionLayer {
 
     /// Get current window size
     pub fn get_window_size(&self) -> usize {
-        let window = self.context_window.read().unwrap();
+        let window = self.context_window.read();
         window.len()
     }
 
     /// Perform health check
-    pub async fn health_check(&self) -> LayerResult<bool> {
+    pub async fn health_check_status(&self) -> LayerResult<bool> {
         // Check if analyzer is responsive
-        let _analyzer = self.analyzer.try_lock()
-            .map_err(|_| LayerError::internal("Analyzer lock is blocked".to_string()))?;
-        
+        if self.analyzer.try_lock().is_err() {
+            return Err(LayerError::TimeoutExceeded { timeout_us: 0 });
+        }
+
         // Check if cache is accessible
-        let _cache = self.prediction_cache.try_read()
-            .map_err(|_| LayerError::internal("Cache lock is blocked".to_string()))?;
+        if self.prediction_cache.try_read().is_err() {
+            return Err(LayerError::TimeoutExceeded { timeout_us: 0 });
+        }
 
         // Check window accessibility
-        let _window = self.context_window.try_read()
-            .map_err(|_| LayerError::internal("Context window lock is blocked".to_string()))?;
+        if self.context_window.try_read().is_err() {
+            return Err(LayerError::TimeoutExceeded { timeout_us: 0 });
+        }
 
         Ok(true)
     }

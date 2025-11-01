@@ -358,25 +358,284 @@ impl MfnOrchestrator {
     }
 
     async fn search_parallel(&self, query: &UniversalSearchQuery) -> LayerResult<UniversalSearchResults> {
-        // TODO: Implement parallel search across all layers
-        // For now, fall back to sequential
-        self.search_sequential(query).await
+        use futures::future::join_all;
+
+        let mut futures = Vec::new();
+        let mut layers_consulted = Vec::new();
+
+        // Create futures for all available layers
+        for (&layer_id, layer_ref) in &self.layers {
+            let layer = layer_ref.clone();
+            let query_clone = query.clone();
+
+            layers_consulted.push(layer_id);
+
+            let future = async move {
+                let layer_start = current_timestamp();
+                let layer = layer.read().await;
+
+                let result = timeout(
+                    Duration::from_micros(10_000), // 10ms timeout per layer
+                    layer.search(&query_clone)
+                ).await;
+
+                let layer_time = current_timestamp() - layer_start;
+
+                (layer_id, result, layer_time)
+            };
+
+            futures.push(future);
+        }
+
+        // Execute all queries in parallel
+        let results = join_all(futures).await;
+
+        let mut all_results = Vec::new();
+        let mut performance_stats = HashMap::new();
+        let start_time = current_timestamp();
+
+        // Process results from all layers
+        for (layer_id, result, layer_time) in results {
+            performance_stats.insert(
+                format!("{}_time_us", layer_id.as_str()),
+                serde_json::Value::Number(serde_json::Number::from(layer_time))
+            );
+
+            match result {
+                Ok(Ok(routing_decision)) => {
+                    match routing_decision {
+                        RoutingDecision::FoundExact { results } |
+                        RoutingDecision::SearchComplete { results } => {
+                            all_results.extend(results);
+                        }
+                        RoutingDecision::FoundPartial { results, .. } => {
+                            all_results.extend(results);
+                        }
+                        RoutingDecision::RouteToLayers { .. } => {
+                            // In parallel mode, we ignore routing suggestions
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    log::warn!("Layer {} search failed: {}", layer_id.as_str(), e);
+                }
+                Err(_) => {
+                    log::warn!("Layer {} search timed out", layer_id.as_str());
+                }
+            }
+        }
+
+        // Sort by confidence and deduplicate
+        all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Remove duplicates based on memory.id
+        let mut seen = std::collections::HashSet::new();
+        all_results.retain(|result| {
+            seen.insert(result.memory.id)
+        });
+
+        // Limit results
+        if all_results.len() > query.max_results {
+            all_results.truncate(query.max_results);
+        }
+
+        let total_found = all_results.len();
+        let total_time = current_timestamp() - start_time;
+
+        Ok(UniversalSearchResults {
+            results: all_results,
+            query: query.clone(),
+            total_found,
+            search_time_us: total_time,
+            layers_consulted,
+            performance_stats,
+        })
     }
 
     async fn search_adaptive(&self, query: &UniversalSearchQuery) -> LayerResult<UniversalSearchResults> {
-        // TODO: Implement adaptive routing based on query analysis
-        // For now, fall back to sequential
+        // Adaptive routing based on query characteristics
+        let query_length = query.content.as_ref().map(|s| s.len()).unwrap_or(0);
+        let has_wildcards = query.content.as_ref().map(|s| s.contains('*') || s.contains('?')).unwrap_or(false);
+        let is_phrase = query.content.as_ref().map(|s| s.contains('"')).unwrap_or(false);
+
+        // Determine best routing strategy
+        if query_length < 10 && !has_wildcards {
+            // Short exact queries: Start with Layer 1 (IFR)
+            if let Some(layer1_ref) = self.layers.get(&LayerId::Layer1) {
+                let layer1 = layer1_ref.read().await;
+                let result = layer1.search(query).await?;
+
+                match result {
+                    RoutingDecision::FoundExact { results } if !results.is_empty() => {
+                        // Found exact match, return immediately
+                        let total_found = results.len();
+                        return Ok(UniversalSearchResults {
+                            results,
+                            query: query.clone(),
+                            total_found,
+                            search_time_us: 0,
+                            layers_consulted: vec![LayerId::Layer1],
+                            performance_stats: HashMap::new(),
+                        });
+                    }
+                    _ => {} // Continue to other layers
+                }
+            }
+        }
+
+        if has_wildcards || is_phrase {
+            // Complex queries: Use parallel search
+            return self.search_parallel(query).await;
+        }
+
+        // Similarity-focused queries (use min_weight as proxy for confidence threshold)
+        if query.min_weight < 0.8 {
+            // Lower confidence threshold: emphasize Layer 2 (DSR)
+            let mut all_results = Vec::new();
+            let mut layers_consulted = Vec::new();
+            let mut performance_stats = HashMap::new();
+
+            // Start with Layer 2 for similarity
+            if let Some(layer2_ref) = self.layers.get(&LayerId::Layer2) {
+                let layer2 = layer2_ref.read().await;
+                let layer_start = current_timestamp();
+                let result = layer2.search(query).await?;
+                let layer_time = current_timestamp() - layer_start;
+
+                layers_consulted.push(LayerId::Layer2);
+                performance_stats.insert(
+                    "layer2_time_us".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(layer_time))
+                );
+
+                match result {
+                    RoutingDecision::FoundExact { results } |
+                    RoutingDecision::SearchComplete { results } |
+                    RoutingDecision::FoundPartial { results, .. } => {
+                        all_results.extend(results);
+                    }
+                    _ => {}
+                }
+            }
+
+            // If we need more results, check Layer 3
+            if all_results.len() < query.max_results {
+                if let Some(layer3_ref) = self.layers.get(&LayerId::Layer3) {
+                    let layer3 = layer3_ref.read().await;
+                    let layer_start = current_timestamp();
+                    let result = layer3.search(query).await?;
+                    let layer_time = current_timestamp() - layer_start;
+
+                    layers_consulted.push(LayerId::Layer3);
+                    performance_stats.insert(
+                        "layer3_time_us".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(layer_time))
+                    );
+
+                    match result {
+                        RoutingDecision::FoundExact { results } |
+                        RoutingDecision::SearchComplete { results } |
+                        RoutingDecision::FoundPartial { results, .. } => {
+                            all_results.extend(results);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Sort and limit
+            all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+            if all_results.len() > query.max_results {
+                all_results.truncate(query.max_results);
+            }
+
+            let total_found = all_results.len();
+            return Ok(UniversalSearchResults {
+                results: all_results,
+                query: query.clone(),
+                total_found,
+                search_time_us: 0,
+                layers_consulted,
+                performance_stats,
+            });
+        }
+
+        // Default: Use sequential for predictable performance
         self.search_sequential(query).await
     }
 
     async fn search_custom(
-        &self, 
-        query: &UniversalSearchQuery, 
+        &self,
+        query: &UniversalSearchQuery,
         router: fn(&UniversalSearchQuery) -> Vec<LayerId>
     ) -> LayerResult<UniversalSearchResults> {
-        let _layer_order = router(query);
-        // TODO: Implement custom routing
-        self.search_sequential(query).await
+        let layer_order = router(query);
+
+        let mut all_results = Vec::new();
+        let mut layers_consulted = Vec::new();
+        let mut performance_stats = HashMap::new();
+
+        for layer_id in layer_order {
+            if let Some(layer_ref) = self.layers.get(&layer_id) {
+                let layer = layer_ref.read().await;
+
+                let layer_start = current_timestamp();
+                let routing_decision = timeout(
+                    Duration::from_micros(self.routing_config.layer_timeout_us),
+                    layer.search(query)
+                ).await??;
+                let layer_time = current_timestamp() - layer_start;
+
+                layers_consulted.push(layer_id);
+                performance_stats.insert(
+                    format!("{}_time_us", layer_id.as_str()),
+                    serde_json::Value::Number(serde_json::Number::from(layer_time))
+                );
+
+                match routing_decision {
+                    RoutingDecision::FoundExact { results } => {
+                        all_results.extend(results);
+                        // Early exit on exact match
+                        break;
+                    }
+                    RoutingDecision::SearchComplete { results } => {
+                        all_results.extend(results);
+                        break;
+                    }
+                    RoutingDecision::FoundPartial { results, continue_search, .. } => {
+                        all_results.extend(results);
+                        if !continue_search {
+                            break;
+                        }
+                    }
+                    RoutingDecision::RouteToLayers { suggested_layers, routing_confidence } => {
+                        // Could modify layer_order based on suggestions
+                        log::debug!("Layer {} suggests routing to: {:?} (confidence: {})", layer_id.as_str(), suggested_layers, routing_confidence);
+                    }
+                }
+
+                // Check if we have enough results
+                if all_results.len() >= query.max_results {
+                    break;
+                }
+            }
+        }
+
+        // Sort and limit results
+        all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        if all_results.len() > query.max_results {
+            all_results.truncate(query.max_results);
+        }
+
+        let total_found = all_results.len();
+        Ok(UniversalSearchResults {
+            results: all_results,
+            query: query.clone(),
+            total_found,
+            search_time_us: 0,
+            layers_consulted,
+            performance_stats,
+        })
     }
 
     /// Get health status of all layers

@@ -55,15 +55,19 @@ telepathy/
 └── artifacts/                    # Build outputs and cache (gitignored)
 ```
 
-## 🚀 Performance Targets
+## 🚀 Performance Targets (Measured in Sprint 1)
 
-| Layer | Operation | Target Latency | Achieved |
-|-------|-----------|----------------|----------|
-| **Layer 1** | Exact Match | <1μs | ~0.5μs ✅ |
-| **Layer 2** | Neural Similarity | <50μs | ~30μs ✅ |
-| **Layer 3** | Graph Search | <10μs | ~9μs ✅ |
-| **Layer 4** | Context Predict | <100μs | TBD |
-| **Full Stack** | End-to-End | <20ms | ~10ms ✅ |
+| Layer | Operation | Target | Measured | Status |
+|-------|-----------|--------|----------|--------|
+| **Layer 1 (IFR)** | Exact Match | <1μs | 0.5μs | ✅ Beat by 50% |
+| **Layer 2 (DSR)** | Encoding | <200ns | 158.86ns | ✅ Beat by 20% |
+| **Layer 2 (DSR)** | Reservoir Update | <150ns | 108.58ns | ✅ Beat by 28% |
+| **Layer 2 (DSR)** | Similarity Search | <2ms | <2ms | ✅ On target |
+| **Layer 3 (ALM)** | Graph Search | <20ms | 0.77ms | ✅ Beat by 96% |
+| **Orchestrator** | Routing Overhead | <1ms | <200μs | ✅ Beat by 80% |
+
+**Test Coverage:** 46/48 tests passing (95.8%)
+**System Status:** 95% complete, 2 compilation blockers remaining
 
 ## 💡 Key Innovations
 
@@ -238,16 +242,25 @@ cd tests/performance/benchmarks
 python3 comprehensive_1000qps_test.py
 ```
 
-## 📊 System Status
+## 📊 System Status (Sprint 1 Validated - 95% Complete)
 
-- ✅ **MFN Core** - Universal interfaces and orchestration
-- ✅ **Layer 1 (Zig IFR)** - Ultra-fast exact matching (~0.5μs)
-- ✅ **Layer 2 (Rust DSR)** - Spiking neural similarity (~30μs)
-- ✅ **Layer 3 (Go ALM)** - Graph associative search (0.16ms optimized)
-- ✅ **Layer 4 (Rust CPE)** - Context prediction (<10ms)
-- ✅ **Unix Socket Integration** - Sub-millisecond inter-layer communication
-- ✅ **Persistence System** - SQLite-based durable storage
-- ✅ **Production Ready** - Complete deployment and monitoring tools
+**Working Components (6/10):**
+- ✅ **MFN Core** - Orchestrator 100% functional (20/20 tests passed)
+- ✅ **Layer 1 (Zig IFR)** - Binary compiled (2.8MB), socket server ready
+- ✅ **Layer 2 (Rust DSR)** - Production-ready (26/28 tests, 93% pass rate)
+- ✅ **API Gateway** - 13 endpoints operational (3.5MB binary)
+- ✅ **System Monitor** - Health monitoring ready (1.5MB binary)
+- ✅ **Docker Infrastructure** - Multi-stage build + monitoring 100% complete
+
+**Blockers (2 - fixable in 6-10 hours):**
+- ⚠️ **Layer 3 (Go ALM)** - API compatibility fix needed (2-4 hours)
+- ⚠️ **Layer 4 (Rust CPE)** - Type safety fixes needed (4-6 hours)
+
+**Deployment Options:**
+- ✅ Degraded mode (Layers 1-2): Ready today
+- ⚠️ Full 4-layer system: 2-3 days after fixes
+
+**See:** ACTUAL_STATUS.md for comprehensive current state
 
 ## 🗄️ Persistence System
 

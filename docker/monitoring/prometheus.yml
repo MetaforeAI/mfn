@@ -1,0 +1,80 @@
+# Prometheus Configuration for MFN System
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: 'production'
+    system: 'mfn'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - '/etc/prometheus/alerts/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # MFN API Gateway metrics
+  - job_name: 'mfn-api'
+    static_configs:
+      - targets: ['mfn-system:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # MFN System metrics (custom exporter)
+  - job_name: 'mfn-system'
+    static_configs:
+      - targets: ['mfn-system:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Docker container metrics
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['mfn-system:9323']
+    metrics_path: '/metrics'
+
+  # Node exporter for host metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+
+# Recording rules for aggregated metrics
+# These would be in separate files referenced above
+# Example content for /etc/prometheus/alerts/mfn_alerts.yml:
+#
+# groups:
+#   - name: mfn_alerts
+#     interval: 30s
+#     rules:
+#       - alert: MFNLayerDown
+#         expr: mfn_layer_status == 0
+#         for: 2m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "MFN Layer {{ $labels.layer }} is down"
+#           description: "Layer {{ $labels.layer }} has been down for more than 2 minutes"
+#
+#       - alert: HighMemoryUsage
+#         expr: mfn_memory_usage_percent > 85
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High memory usage detected"
+#           description: "Memory usage is above 85% (current: {{ $value }}%)"
+#
+#       - alert: HighErrorRate
+#         expr: rate(mfn_api_errors_total[5m]) > 0.1
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High API error rate"
+#           description: "API error rate is above 10% in the last 5 minutes"

@@ -1,0 +1,539 @@
+// Socket Client implementations for MFN layers
+// Provides unified interface for connecting to all 4 layers via Unix sockets
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, Instant};
+use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
+use tokio::net::UnixStream;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::time::timeout;
+use tracing::{debug, warn, error};
+use uuid::Uuid;
+
+// Socket paths for all layers
+pub const LAYER1_SOCKET_PATH: &str = "/tmp/mfn_layer1.sock";
+pub const LAYER2_SOCKET_PATH: &str = "/tmp/mfn_layer2.sock";
+pub const LAYER3_SOCKET_PATH: &str = "/tmp/mfn_layer3.sock";
+pub const LAYER4_SOCKET_PATH: &str = "/tmp/mfn_layer4.sock";
+
+// Binary protocol constants
+pub const PROTOCOL_BINARY: u8 = 0x02;
+pub const MSG_QUERY_MEMORY: u8 = 0x20;
+pub const MSG_ADD_MEMORY: u8 = 0x10;
+pub const MSG_RESPONSE: u8 = 0x80;
+pub const MSG_ERROR: u8 = 0x90;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalSearchQuery {
+    pub query_id: String,
+    pub content: String,
+    pub search_type: SearchType,
+    pub max_results: usize,
+    pub min_confidence: f32,
+    pub timeout_ms: u64,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SearchType {
+    Exact,
+    Similarity,
+    Associative,
+    Contextual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniversalSearchResult {
+    pub memory_id: u64,
+    pub content: String,
+    pub confidence: f32,
+    pub layer_source: u8,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LayerQueryResult {
+    pub results: Vec<UniversalSearchResult>,
+    pub processing_time_ms: f64,
+    pub confidence: f64,
+    pub metadata: HashMap<String, String>,
+}
+
+// ============================================================================
+// Layer 1 IFR Client (Zig)
+// ============================================================================
+
+pub struct Layer1Client {
+    socket_path: String,
+    connection_timeout: Duration,
+}
+
+impl Layer1Client {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            socket_path: LAYER1_SOCKET_PATH.to_string(),
+            connection_timeout: Duration::from_millis(5000),
+        })
+    }
+
+    pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        let start = Instant::now();
+
+        // Connect to Layer 1 socket
+        let stream = timeout(
+            self.connection_timeout,
+            UnixStream::connect(&self.socket_path)
+        ).await
+            .map_err(|_| anyhow!("Layer 1 connection timeout"))?
+            .map_err(|e| anyhow!("Layer 1 connection failed: {}", e))?;
+
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send JSON query (Layer 1 supports JSON)
+        let json_request = serde_json::json!({
+            "type": "query",
+            "request_id": &query.query_id,
+            "content": &query.content,
+        });
+
+        let request_str = format!("{}\n", json_request);
+        writer.write_all(request_str.as_bytes()).await?;
+
+        // Read response
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await?;
+
+        // Parse JSON response
+        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+
+        let processing_time = start.elapsed().as_millis() as f64;
+
+        // Convert response to LayerQueryResult
+        if response["success"].as_bool().unwrap_or(false) {
+            let found_exact = response["found_exact"].as_bool().unwrap_or(false);
+            let confidence = response["confidence"].as_f64().unwrap_or(0.0);
+
+            let mut results = Vec::new();
+            if found_exact {
+                if let Some(result_str) = response["result"].as_str() {
+                    results.push(UniversalSearchResult {
+                        memory_id: response["memory_id_hash"].as_u64().unwrap_or(0),
+                        content: result_str.to_string(),
+                        confidence: confidence as f32,
+                        layer_source: 1,
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+
+            Ok(LayerQueryResult {
+                results,
+                processing_time_ms: processing_time,
+                confidence,
+                metadata: HashMap::new(),
+            })
+        } else {
+            Err(anyhow!("Layer 1 query failed"))
+        }
+    }
+
+    pub async fn add_memory(&self, content: &str, memory_data: &[u8]) -> Result<u64> {
+        // Connect to Layer 1 socket
+        let stream = timeout(
+            self.connection_timeout,
+            UnixStream::connect(&self.socket_path)
+        ).await
+            .map_err(|_| anyhow!("Layer 1 connection timeout"))?
+            .map_err(|e| anyhow!("Layer 1 connection failed: {}", e))?;
+
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send JSON add memory request
+        let json_request = serde_json::json!({
+            "type": "add_memory",
+            "request_id": Uuid::new_v4().to_string(),
+            "content": content,
+            "memory_data": base64::encode(memory_data),
+        });
+
+        let request_str = format!("{}\n", json_request);
+        writer.write_all(request_str.as_bytes()).await?;
+
+        // Read response
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await?;
+
+        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+
+        if response["success"].as_bool().unwrap_or(false) {
+            Ok(response["memory_id_hash"].as_u64().unwrap_or(0))
+        } else {
+            Err(anyhow!("Failed to add memory to Layer 1"))
+        }
+    }
+
+    pub fn shutdown(self) -> Result<()> {
+        // Clean shutdown
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Layer 2 DSR Client (Rust)
+// ============================================================================
+
+pub struct Layer2Client {
+    socket_path: String,
+    connection_timeout: Duration,
+}
+
+impl Layer2Client {
+    pub async fn new() -> Result<Self> {
+        Ok(Self {
+            socket_path: LAYER2_SOCKET_PATH.to_string(),
+            connection_timeout: Duration::from_millis(5000),
+        })
+    }
+
+    pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        let start = Instant::now();
+
+        // Connect to Layer 2 socket
+        let stream = timeout(
+            self.connection_timeout,
+            UnixStream::connect(&self.socket_path)
+        ).await
+            .map_err(|_| anyhow!("Layer 2 connection timeout"))?
+            .map_err(|e| anyhow!("Layer 2 connection failed: {}", e))?;
+
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Generate query embedding (simplified - real implementation would use actual encoding)
+        let query_embedding = vec![0.1f32; 128]; // Placeholder embedding
+
+        // Send JSON similarity search request
+        let json_request = serde_json::json!({
+            "type": "SimilaritySearch",
+            "request_id": &query.query_id,
+            "query_embedding": query_embedding,
+            "top_k": query.max_results,
+            "min_confidence": query.min_confidence,
+            "timeout_ms": query.timeout_ms,
+        });
+
+        let request_str = format!("{}\n", json_request);
+        writer.write_all(request_str.as_bytes()).await?;
+
+        // Read response
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await?;
+
+        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+
+        let processing_time = start.elapsed().as_millis() as f64;
+
+        // Convert response to LayerQueryResult
+        if response["success"].as_bool().unwrap_or(false) {
+            let mut results = Vec::new();
+
+            if let Some(search_results) = response["results"].as_array() {
+                for result in search_results {
+                    results.push(UniversalSearchResult {
+                        memory_id: result["memory_id"].as_u64().unwrap_or(0),
+                        content: result["content"].as_str().unwrap_or("").to_string(),
+                        confidence: result["similarity_score"].as_f64().unwrap_or(0.0) as f32,
+                        layer_source: 2,
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+
+            Ok(LayerQueryResult {
+                results,
+                processing_time_ms: processing_time,
+                confidence: response["average_confidence"].as_f64().unwrap_or(0.0),
+                metadata: HashMap::new(),
+            })
+        } else {
+            Err(anyhow!("Layer 2 query failed"))
+        }
+    }
+
+    pub fn shutdown(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Layer 3 ALM Client (Go)
+// ============================================================================
+
+pub struct Layer3Client {
+    socket_path: String,
+    connection_timeout: Duration,
+}
+
+impl Layer3Client {
+    pub async fn new() -> Result<Self> {
+        Ok(Self {
+            socket_path: LAYER3_SOCKET_PATH.to_string(),
+            connection_timeout: Duration::from_millis(5000),
+        })
+    }
+
+    pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        let start = Instant::now();
+
+        // Connect to Layer 3 socket
+        let stream = timeout(
+            self.connection_timeout,
+            UnixStream::connect(&self.socket_path)
+        ).await
+            .map_err(|_| anyhow!("Layer 3 connection timeout"))?
+            .map_err(|e| anyhow!("Layer 3 connection failed: {}", e))?;
+
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send JSON search request
+        let json_request = serde_json::json!({
+            "type": "search",
+            "request_id": &query.query_id,
+            "query": &query.content,
+            "limit": query.max_results,
+            "min_confidence": query.min_confidence,
+        });
+
+        let request_str = format!("{}\n", json_request);
+        writer.write_all(request_str.as_bytes()).await?;
+
+        // Read response
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await?;
+
+        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+
+        let processing_time = start.elapsed().as_millis() as f64;
+
+        // Convert response to LayerQueryResult
+        if response["success"].as_bool().unwrap_or(false) {
+            let mut results = Vec::new();
+
+            if let Some(search_results) = response["results"].as_array() {
+                for result in search_results {
+                    results.push(UniversalSearchResult {
+                        memory_id: result["id"].as_u64().unwrap_or(0),
+                        content: result["content"].as_str().unwrap_or("").to_string(),
+                        confidence: result["score"].as_f64().unwrap_or(0.0) as f32,
+                        layer_source: 3,
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+
+            Ok(LayerQueryResult {
+                results,
+                processing_time_ms: processing_time,
+                confidence: response["confidence"].as_f64().unwrap_or(0.0),
+                metadata: HashMap::new(),
+            })
+        } else {
+            Err(anyhow!("Layer 3 query failed"))
+        }
+    }
+
+    pub fn shutdown(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Layer 4 CPE Client (Rust)
+// ============================================================================
+
+pub struct Layer4Client {
+    socket_path: String,
+    connection_timeout: Duration,
+}
+
+impl Layer4Client {
+    pub async fn new() -> Result<Self> {
+        Ok(Self {
+            socket_path: LAYER4_SOCKET_PATH.to_string(),
+            connection_timeout: Duration::from_millis(5000),
+        })
+    }
+
+    pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        let start = Instant::now();
+
+        // Connect to Layer 4 socket
+        let stream = timeout(
+            self.connection_timeout,
+            UnixStream::connect(&self.socket_path)
+        ).await
+            .map_err(|_| anyhow!("Layer 4 connection timeout"))?
+            .map_err(|e| anyhow!("Layer 4 connection failed: {}", e))?;
+
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send JSON context prediction request
+        let json_request = serde_json::json!({
+            "type": "predict_context",
+            "request_id": &query.query_id,
+            "query": &query.content,
+            "max_predictions": query.max_results,
+            "min_confidence": query.min_confidence,
+        });
+
+        let request_str = format!("{}\n", json_request);
+        writer.write_all(request_str.as_bytes()).await?;
+
+        // Read response
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await?;
+
+        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+
+        let processing_time = start.elapsed().as_millis() as f64;
+
+        // Convert response to LayerQueryResult
+        if response["success"].as_bool().unwrap_or(false) {
+            let mut results = Vec::new();
+
+            if let Some(predictions) = response["predictions"].as_array() {
+                for pred in predictions {
+                    results.push(UniversalSearchResult {
+                        memory_id: pred["memory_id"].as_u64().unwrap_or(0),
+                        content: pred["predicted_content"].as_str().unwrap_or("").to_string(),
+                        confidence: pred["confidence"].as_f64().unwrap_or(0.0) as f32,
+                        layer_source: 4,
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+
+            Ok(LayerQueryResult {
+                results,
+                processing_time_ms: processing_time,
+                confidence: response["overall_confidence"].as_f64().unwrap_or(0.0),
+                metadata: HashMap::new(),
+            })
+        } else {
+            Err(anyhow!("Layer 4 query failed"))
+        }
+    }
+
+    pub fn shutdown(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Connection Pool for efficient socket reuse
+// ============================================================================
+
+pub struct LayerConnectionPool {
+    layer1: Option<Layer1Client>,
+    layer2: Option<Layer2Client>,
+    layer3: Option<Layer3Client>,
+    layer4: Option<Layer4Client>,
+}
+
+impl LayerConnectionPool {
+    pub async fn new() -> Result<Self> {
+        Ok(Self {
+            layer1: None,
+            layer2: None,
+            layer3: None,
+            layer4: None,
+        })
+    }
+
+    pub async fn get_layer1(&mut self) -> Result<&Layer1Client> {
+        if self.layer1.is_none() {
+            self.layer1 = Some(Layer1Client::new()?);
+        }
+        Ok(self.layer1.as_ref().unwrap())
+    }
+
+    pub async fn get_layer2(&mut self) -> Result<&Layer2Client> {
+        if self.layer2.is_none() {
+            self.layer2 = Some(Layer2Client::new().await?);
+        }
+        Ok(self.layer2.as_ref().unwrap())
+    }
+
+    pub async fn get_layer3(&mut self) -> Result<&Layer3Client> {
+        if self.layer3.is_none() {
+            self.layer3 = Some(Layer3Client::new().await?);
+        }
+        Ok(self.layer3.as_ref().unwrap())
+    }
+
+    pub async fn get_layer4(&mut self) -> Result<&Layer4Client> {
+        if self.layer4.is_none() {
+            self.layer4 = Some(Layer4Client::new().await?);
+        }
+        Ok(self.layer4.as_ref().unwrap())
+    }
+
+    pub fn shutdown(self) -> Result<()> {
+        if let Some(client) = self.layer1 {
+            client.shutdown()?;
+        }
+        if let Some(client) = self.layer2 {
+            client.shutdown()?;
+        }
+        if let Some(client) = self.layer3 {
+            client.shutdown()?;
+        }
+        if let Some(client) = self.layer4 {
+            client.shutdown()?;
+        }
+        Ok(())
+    }
+}
+
+// Base64 encoding support for binary data
+mod base64 {
+    pub fn encode(input: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut result = String::new();
+        let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+        for chunk in input.chunks(3) {
+            let mut buf = [0u8; 3];
+            for (i, &byte) in chunk.iter().enumerate() {
+                buf[i] = byte;
+            }
+
+            let _ = write!(result, "{}",
+                alphabet.chars().nth((buf[0] >> 2) as usize).unwrap());
+            let _ = write!(result, "{}",
+                alphabet.chars().nth((((buf[0] & 0x03) << 4) | (buf[1] >> 4)) as usize).unwrap());
+
+            if chunk.len() > 1 {
+                let _ = write!(result, "{}",
+                    alphabet.chars().nth((((buf[1] & 0x0f) << 2) | (buf[2] >> 6)) as usize).unwrap());
+            } else {
+                result.push('=');
+            }
+
+            if chunk.len() > 2 {
+                let _ = write!(result, "{}",
+                    alphabet.chars().nth((buf[2] & 0x3f) as usize).unwrap());
+            } else {
+                result.push('=');
+            }
+        }
+
+        result
+    }
+}

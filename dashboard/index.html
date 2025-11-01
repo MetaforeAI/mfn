@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MFN System Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0a0e1b;
+            --bg-secondary: #131827;
+            --bg-tertiary: #1a2236;
+            --text-primary: #e4e6eb;
+            --text-secondary: #9ca3af;
+            --accent-primary: #3b82f6;
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --accent-danger: #ef4444;
+            --border-color: #2d3748;
+            --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        body.light-mode {
+            --bg-primary: #f9fafb;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f3f4f6;
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: var(--shadow);
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.online {
+            background: var(--accent-success);
+        }
+
+        .status-indicator.offline {
+            background: var(--accent-danger);
+        }
+
+        .status-indicator.warning {
+            background: var(--accent-warning);
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .theme-toggle {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .theme-toggle:hover {
+            background: var(--accent-primary);
+        }
+
+        /* Main Layout */
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            min-height: calc(100vh - 65px);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1rem;
+        }
+
+        .nav-item {
+            display: block;
+            padding: 0.75rem 1rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 6px;
+            margin-bottom: 0.25rem;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .nav-item:hover,
+        .nav-item.active {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            border-left: 3px solid var(--accent-primary);
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        /* Grid Layouts */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            transition: transform 0.3s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-change {
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .metric-change.positive {
+            color: var(--accent-success);
+        }
+
+        .metric-change.negative {
+            color: var(--accent-danger);
+        }
+
+        /* Layer Status Grid */
+        .layer-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .layer-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .layer-header {
+            padding: 1rem 1.5rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .layer-title {
+            font-weight: 600;
+        }
+
+        .layer-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .layer-status.healthy {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--accent-success);
+        }
+
+        .layer-status.degraded {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--accent-warning);
+        }
+
+        .layer-status.failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--accent-danger);
+        }
+
+        .layer-content {
+            padding: 1.5rem;
+        }
+
+        .layer-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .layer-metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .layer-metric-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .layer-metric-value {
+            font-weight: 600;
+        }
+
+        /* Charts */
+        .chart-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .chart-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+
+        .chart-controls {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .time-selector {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        .time-selector.active {
+            background: var(--accent-primary);
+        }
+
+        .chart {
+            position: relative;
+            height: 300px;
+            overflow: hidden;
+        }
+
+        .canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Logs Panel */
+        .logs-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .logs-header {
+            padding: 1rem 1.5rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logs-container {
+            height: 400px;
+            overflow-y: auto;
+            padding: 1rem;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 0.875rem;
+        }
+
+        .log-entry {
+            padding: 0.5rem;
+            margin-bottom: 0.25rem;
+            border-radius: 4px;
+            display: flex;
+            gap: 1rem;
+            background: var(--bg-tertiary);
+        }
+
+        .log-timestamp {
+            color: var(--text-secondary);
+            min-width: 180px;
+        }
+
+        .log-level {
+            min-width: 60px;
+            font-weight: 600;
+        }
+
+        .log-level.info {
+            color: var(--accent-primary);
+        }
+
+        .log-level.warning {
+            color: var(--accent-warning);
+        }
+
+        .log-level.error {
+            color: var(--accent-danger);
+        }
+
+        .log-message {
+            flex: 1;
+        }
+
+        /* Query Trace */
+        .trace-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+        }
+
+        .trace-timeline {
+            position: relative;
+            padding: 2rem 0;
+        }
+
+        .trace-line {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--border-color);
+        }
+
+        .trace-nodes {
+            display: flex;
+            justify-content: space-between;
+            position: relative;
+            z-index: 1;
+        }
+
+        .trace-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .trace-node-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--accent-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        .trace-node.complete .trace-node-icon {
+            background: var(--accent-success);
+            border-color: var(--accent-success);
+        }
+
+        .trace-node-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .trace-node-time {
+            font-size: 0.75rem;
+            color: var(--accent-primary);
+            font-weight: 600;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                display: none;
+            }
+
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .layer-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Loading State */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            pointer-events: none;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>
+            <span class="status-indicator online" id="systemStatus"></span>
+            MFN System Dashboard
+        </h1>
+        <div class="header-controls">
+            <span id="connectionStatus">Connected</span>
+            <span id="lastUpdate">Last update: --:--:--</span>
+            <button class="theme-toggle" onclick="toggleTheme()">🌓 Toggle Theme</button>
+        </div>
+    </header>
+
+    <div class="dashboard-container">
+        <aside class="sidebar">
+            <nav>
+                <a class="nav-item active" onclick="showView('overview')">📊 Overview</a>
+                <a class="nav-item" onclick="showView('layers')">🔧 Layer Status</a>
+                <a class="nav-item" onclick="showView('performance')">📈 Performance</a>
+                <a class="nav-item" onclick="showView('memory')">💾 Memory</a>
+                <a class="nav-item" onclick="showView('traces')">🔍 Query Traces</a>
+                <a class="nav-item" onclick="showView('logs')">📝 System Logs</a>
+                <a class="nav-item" onclick="showView('config')">⚙️ Configuration</a>
+            </nav>
+        </aside>
+
+        <main class="main-content" id="mainContent">
+            <!-- Overview View -->
+            <div id="overview" class="view">
+                <h2>System Overview</h2>
+
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Queries/Second</div>
+                        <div class="metric-value" id="qps">0</div>
+                        <div class="metric-change positive">
+                            <span>↑</span>
+                            <span id="qpsChange">+0%</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-label">Average Latency</div>
+                        <div class="metric-value" id="avgLatency">0ms</div>
+                        <div class="metric-change positive">
+                            <span>↓</span>
+                            <span id="latencyChange">-0%</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-label">Memory Usage</div>
+                        <div class="metric-value" id="memUsage">0%</div>
+                        <div class="metric-change positive">
+                            <span id="memIndicator">→</span>
+                            <span id="memChange">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-label">Active Connections</div>
+                        <div class="metric-value" id="connections">0</div>
+                        <div class="metric-change positive">
+                            <span>↑</span>
+                            <span id="connChange">+0</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-label">Error Rate</div>
+                        <div class="metric-value" id="errorRate">0%</div>
+                        <div class="metric-change positive">
+                            <span>→</span>
+                            <span id="errorChange">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-label">System Uptime</div>
+                        <div class="metric-value" id="uptime">0h 0m</div>
+                        <div class="metric-change">
+                            <span>Since: </span>
+                            <span id="startTime">--:--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <h3 class="chart-title">System Performance</h3>
+                        <div class="chart-controls">
+                            <button class="time-selector active" onclick="setTimeRange('1h')">1H</button>
+                            <button class="time-selector" onclick="setTimeRange('6h')">6H</button>
+                            <button class="time-selector" onclick="setTimeRange('24h')">24H</button>
+                            <button class="time-selector" onclick="setTimeRange('7d')">7D</button>
+                        </div>
+                    </div>
+                    <div class="chart">
+                        <canvas id="performanceChart" class="canvas"></canvas>
+                    </div>
+                </div>
+
+                <div class="layer-grid">
+                    <div class="layer-card">
+                        <div class="layer-header">
+                            <span class="layer-title">Layer 1: IFR (Immediate Flow Registry)</span>
+                            <span class="layer-status healthy" id="layer1Status">HEALTHY</span>
+                        </div>
+                        <div class="layer-content">
+                            <div>Exact memory matching using hash-based lookup</div>
+                            <div class="layer-metrics">
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Latency</span>
+                                    <span class="layer-metric-value" id="layer1Latency">0.5μs</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Hit Rate</span>
+                                    <span class="layer-metric-value" id="layer1HitRate">95%</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Memory</span>
+                                    <span class="layer-metric-value" id="layer1Memory">12MB</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Entries</span>
+                                    <span class="layer-metric-value" id="layer1Entries">10K</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="layer-card">
+                        <div class="layer-header">
+                            <span class="layer-title">Layer 2: DSR (Dynamic Similarity)</span>
+                            <span class="layer-status healthy" id="layer2Status">HEALTHY</span>
+                        </div>
+                        <div class="layer-content">
+                            <div>Spiking neural networks for similarity search</div>
+                            <div class="layer-metrics">
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Latency</span>
+                                    <span class="layer-metric-value" id="layer2Latency">30μs</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Accuracy</span>
+                                    <span class="layer-metric-value" id="layer2Accuracy">92%</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Memory</span>
+                                    <span class="layer-metric-value" id="layer2Memory">48MB</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Neurons</span>
+                                    <span class="layer-metric-value" id="layer2Neurons">100K</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="layer-card">
+                        <div class="layer-header">
+                            <span class="layer-title">Layer 3: ALM (Associative Link Mesh)</span>
+                            <span class="layer-status healthy" id="layer3Status">HEALTHY</span>
+                        </div>
+                        <div class="layer-content">
+                            <div>Graph-based associative memory network</div>
+                            <div class="layer-metrics">
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Latency</span>
+                                    <span class="layer-metric-value" id="layer3Latency">160μs</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Graph Size</span>
+                                    <span class="layer-metric-value" id="layer3GraphSize">50K</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Memory</span>
+                                    <span class="layer-metric-value" id="layer3Memory">128MB</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Edges</span>
+                                    <span class="layer-metric-value" id="layer3Edges">500K</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="layer-card">
+                        <div class="layer-header">
+                            <span class="layer-title">Layer 4: CPE (Context Prediction)</span>
+                            <span class="layer-status degraded" id="layer4Status">DEGRADED</span>
+                        </div>
+                        <div class="layer-content">
+                            <div>Temporal pattern prediction engine</div>
+                            <div class="layer-metrics">
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Latency</span>
+                                    <span class="layer-metric-value" id="layer4Latency">--</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Accuracy</span>
+                                    <span class="layer-metric-value" id="layer4Accuracy">--</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Memory</span>
+                                    <span class="layer-metric-value" id="layer4Memory">--</span>
+                                </div>
+                                <div class="layer-metric">
+                                    <span class="layer-metric-label">Patterns</span>
+                                    <span class="layer-metric-value" id="layer4Patterns">--</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Layers View -->
+            <div id="layers" class="view" style="display:none;">
+                <h2>Layer Status Details</h2>
+                <div id="layersDetail">Loading...</div>
+            </div>
+
+            <!-- Performance View -->
+            <div id="performance" class="view" style="display:none;">
+                <h2>Performance Metrics</h2>
+                <div id="performanceDetail">
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <h3 class="chart-title">Latency Distribution</h3>
+                        </div>
+                        <div class="chart">
+                            <canvas id="latencyChart" class="canvas"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <h3 class="chart-title">Throughput Over Time</h3>
+                        </div>
+                        <div class="chart">
+                            <canvas id="throughputChart" class="canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory View -->
+            <div id="memory" class="view" style="display:none;">
+                <h2>Memory Management</h2>
+                <div id="memoryDetail">
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <h3 class="chart-title">Memory Distribution</h3>
+                        </div>
+                        <div class="chart">
+                            <canvas id="memoryChart" class="canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Traces View -->
+            <div id="traces" class="view" style="display:none;">
+                <h2>Query Traces</h2>
+                <div class="trace-container">
+                    <h3>Recent Query Flow</h3>
+                    <div class="trace-timeline">
+                        <div class="trace-line"></div>
+                        <div class="trace-nodes">
+                            <div class="trace-node complete">
+                                <div class="trace-node-icon">L1</div>
+                                <div class="trace-node-label">IFR</div>
+                                <div class="trace-node-time">0.5μs</div>
+                            </div>
+                            <div class="trace-node complete">
+                                <div class="trace-node-icon">L2</div>
+                                <div class="trace-node-label">DSR</div>
+                                <div class="trace-node-time">30μs</div>
+                            </div>
+                            <div class="trace-node complete">
+                                <div class="trace-node-icon">L3</div>
+                                <div class="trace-node-label">ALM</div>
+                                <div class="trace-node-time">160μs</div>
+                            </div>
+                            <div class="trace-node">
+                                <div class="trace-node-icon">L4</div>
+                                <div class="trace-node-label">CPE</div>
+                                <div class="trace-node-time">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs View -->
+            <div id="logs" class="view" style="display:none;">
+                <h2>System Logs</h2>
+                <div class="logs-panel">
+                    <div class="logs-header">
+                        <h3>Recent Activity</h3>
+                        <div>
+                            <select id="logFilter">
+                                <option value="all">All Levels</option>
+                                <option value="error">Errors Only</option>
+                                <option value="warning">Warnings</option>
+                                <option value="info">Info</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="logs-container" id="logsContainer">
+                        <!-- Logs will be inserted here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Config View -->
+            <div id="config" class="view" style="display:none;">
+                <h2>System Configuration</h2>
+                <div id="configDetail">Loading configuration...</div>
+            </div>
+        </main>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>

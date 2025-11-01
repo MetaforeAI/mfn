@@ -1,47 +1,50 @@
-# MFN Test Orchestrator Requirements
-# Core dependencies for test orchestration and validation
+# MFN Production Requirements
+# Core dependencies for MFN system deployment
 
-# Core Python packages
-numpy>=1.21.0
-pandas>=1.3.0
-matplotlib>=3.4.0
-seaborn>=0.11.0
+# Core Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+pandas>=1.5.0
 
-# HTTP and async
-requests>=2.26.0
-aiohttp>=3.8.0
+# Web Framework & API
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
 
-# System monitoring
-psutil>=5.8.0
+# Async & Networking
+aiohttp>=3.9.0
+aiofiles>=23.0
+websockets>=12.0
 
-# Data presentation
-tabulate>=0.8.9
+# Database & Persistence
+sqlalchemy>=2.0.0
+alembic>=1.12.0
 
-# Testing utilities
-pytest>=7.0.0
-pytest-asyncio>=0.18.0
-pytest-timeout>=2.1.0
+# Monitoring & Metrics
+prometheus-client>=0.19.0
+psutil>=5.9.0
 
-# Performance testing
-locust>=2.0.0
-
-# Data serialization
+# Data Serialization
+msgpack>=1.0.0
 jsonschema>=4.0.0
 
-# Progress tracking
+# Utilities
+python-multipart>=0.0.6
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Logging & Debugging
+colorama>=0.4.4
+tabulate>=0.8.9
 tqdm>=4.62.0
 
-# Color output for terminals
-colorama>=0.4.4
+# Testing (Optional - not needed in production container)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-timeout>=2.1.0
 
-# Statistical analysis
-scipy>=1.7.0
-
-# Database
-sqlite3-python>=1.0.0
-
-# Visualization export
-Pillow>=9.0.0
-
-# Documentation
-pyyaml>=6.0
+# Documentation (Optional)
+mkdocs>=1.5.0
+mkdocs-material>=9.4.0

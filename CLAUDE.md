@@ -1,0 +1,1 @@
+- do not create corrected versions, simple versions, or alternative versions of documentation or code. fix what we have. refactor, rewrite, consolidate or eliminate if its no longer needed.

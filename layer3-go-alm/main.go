@@ -42,9 +42,16 @@ func main() {
 	}
 	defer ffiServer.Stop()
 
+	// Initialize Unix socket server for inter-layer communication
+	unixServer := server.NewUnixSocketServer(almInstance, "/tmp/mfn_layer3.sock")
+	if err := unixServer.Start(); err != nil {
+		log.Fatalf("Failed to start Unix socket server: %v", err)
+	}
+	defer unixServer.Stop()
+
 	// Initialize optimized HTTP server for monitoring and API
 	httpServer := server.NewOptimizedServer(almInstance, &cfg.ServerConfig)
-	
+
 	// Start metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {

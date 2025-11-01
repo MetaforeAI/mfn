@@ -204,6 +204,12 @@ impl SocketServer {
         Ok(())
     }
 
+    /// Run the socket server (combines start logic)
+    pub async fn run(mut self) -> Result<()> {
+        self.start().await?;
+        Ok(())
+    }
+
     /// Stop the socket server
     pub async fn stop(&mut self) -> Result<()> {
         {
@@ -741,8 +747,8 @@ mod tests {
         
         let request_line = format!("{}\n", serde_json::to_string(&ping_request).unwrap());
         stream.write_all(request_line.as_bytes()).await.unwrap();
-        
-        let mut reader = BufReader::new(&stream);
+
+        let mut reader = BufReader::new(stream);
         let mut response_line = String::new();
         reader.read_line(&mut response_line).await.unwrap();
         
@@ -757,7 +763,7 @@ mod tests {
         }
 
         // Cleanup
-        drop(stream);
+        drop(reader);
         server_handle.abort();
         let _ = std::fs::remove_file("/tmp/test_layer2_ping.sock");
     }

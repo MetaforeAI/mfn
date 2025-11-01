@@ -390,7 +390,10 @@ impl TemporalAnalyzer {
 
         // Handle completed matches
         for completed in completed_matches {
-            self.matcher.active_matches.remove(&self.patterns[&completed.pattern_id].signature);
+            // Find the pattern signature by pattern_id
+            if let Some(pattern) = self.patterns.values().find(|p| p.id == completed.pattern_id) {
+                self.matcher.active_matches.remove(&pattern.signature);
+            }
             self.matcher.completed_matches.push(completed);
             
             // Limit completed matches history
@@ -685,9 +688,206 @@ impl TemporalAnalyzer {
         predictions
     }
 
-    fn statistical_predictions(&self, _context: &PredictionContext) -> Vec<PredictionResult> {
-        // TODO: Implement statistical model predictions
-        Vec::new()
+    fn statistical_predictions(&self, context: &PredictionContext) -> Vec<PredictionResult> {
+        let mut predictions = Vec::new();
+
+        // Use interval models to predict temporal patterns
+        for (pattern_type, model) in &self.interval_models {
+            // Find patterns of this type that haven't completed recently
+            let relevant_patterns: Vec<&TemporalPattern> = self.patterns
+                .values()
+                .filter(|p| p.pattern_type == *pattern_type)
+                .filter(|p| p.confidence >= self.config.min_prediction_confidence)
+                .collect();
+
+            for pattern in relevant_patterns {
+                // Calculate time since last occurrence
+                let time_since_last = context.current_timestamp
+                    .saturating_sub(pattern.last_occurrence);
+
+                // Use statistical model to predict likelihood of next occurrence
+                let probability = self.calculate_temporal_probability(
+                    time_since_last,
+                    model,
+                    pattern.average_interval_us,
+                );
+
+                // If probability is significant, predict next memory in sequence
+                if probability > self.config.min_prediction_confidence {
+                    // Check if we have context about current position in pattern
+                    let next_index = if let Some(recent) = context.recent_sequence.as_ref() {
+                        // Find where we are in the pattern sequence
+                        self.find_pattern_position(recent, &pattern.sequence)
+                    } else {
+                        0 // Start from beginning if no context
+                    };
+
+                    if next_index < pattern.sequence.len() {
+                        let predicted_memory = pattern.sequence[next_index];
+
+                        // Adjust confidence based on temporal likelihood
+                        let temporal_weight = 0.6;
+                        let pattern_weight = 0.4;
+                        let combined_confidence =
+                            probability * temporal_weight +
+                            pattern.confidence * pattern_weight;
+
+                        predictions.push(PredictionResult {
+                            memory_id: predicted_memory,
+                            confidence: combined_confidence,
+                            prediction_type: PredictionType::StatisticalModel,
+                            estimated_time_us: self.estimate_next_occurrence(model, time_since_last),
+                            contributing_evidence: vec![
+                                format!("Pattern type: {:?}", pattern_type),
+                                format!("Temporal probability: {:.3}", probability),
+                                format!("Pattern confidence: {:.3}", pattern.confidence),
+                                format!("Model: {:?} distribution", model.distribution_type),
+                                format!("Mean interval: {} μs", model.mean as u64),
+                            ],
+                        });
+                    }
+                }
+            }
+        }
+
+        // Add frequency-based predictions using statistical models
+        if let Some(recent) = context.recent_sequence.as_ref() {
+            if !recent.is_empty() {
+                let last_memory = recent[recent.len() - 1];
+
+                // Look at historical transitions and their timing
+                if let Some(transitions) = self.transition_matrix.get(&last_memory) {
+                    for (next_memory, transition_data) in transitions {
+                        // Calculate expected time based on statistical model
+                        let expected_probability = transition_data.probability;
+
+                        if expected_probability >= self.config.min_prediction_confidence {
+                            predictions.push(PredictionResult {
+                                memory_id: *next_memory,
+                                confidence: expected_probability * 0.9, // Slight penalty for statistical uncertainty
+                                prediction_type: PredictionType::StatisticalModel,
+                                estimated_time_us: transition_data.average_interval,
+                                contributing_evidence: vec![
+                                    format!("Transition probability: {:.3}", expected_probability),
+                                    format!("Historical count: {}", transition_data.count),
+                                    format!("Average interval: {} μs", transition_data.average_interval),
+                                ],
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        predictions
+    }
+
+    /// Calculate probability of pattern occurrence based on temporal model
+    fn calculate_temporal_probability(
+        &self,
+        time_elapsed: u64,
+        model: &IntervalModel,
+        expected_interval: u64,
+    ) -> f64 {
+        match model.distribution_type {
+            DistributionType::Normal => {
+                // Use normal distribution PDF
+                let mean = model.mean;
+                let std_dev = model.variance.sqrt();
+                let z = (time_elapsed as f64 - mean) / std_dev;
+
+                // Approximate normal PDF
+                let pdf = (1.0 / (std_dev * (2.0 * std::f64::consts::PI).sqrt()))
+                    * (-0.5 * z * z).exp();
+
+                // Normalize to 0-1 range (approximate)
+                (pdf * std_dev).min(1.0)
+            }
+            DistributionType::Exponential => {
+                // Exponential distribution for time-between-events
+                let lambda = 1.0 / model.mean;
+                let cdf = 1.0 - (-lambda * time_elapsed as f64).exp();
+
+                // Return probability of event occurring by now
+                cdf.min(1.0)
+            }
+            DistributionType::Gamma => {
+                // Simplified Gamma distribution approximation
+                // Using shape=2, scale=mean/2 for burstiness
+                let shape = 2.0;
+                let scale = model.mean / shape;
+                let lambda = 1.0 / scale;
+
+                // Approximate CDF for shape=2
+                let x = time_elapsed as f64 * lambda;
+                let cdf = 1.0 - (1.0 + x) * (-x).exp();
+
+                cdf.min(1.0)
+            }
+            DistributionType::Weibull => {
+                // Weibull for varying hazard rates
+                let k = if model.variance < model.mean * model.mean {
+                    2.0_f64 // Increasing hazard rate
+                } else {
+                    0.8_f64 // Decreasing hazard rate
+                };
+                let lambda = model.mean / (1.0_f64 / k).exp();
+
+                // Weibull CDF
+                let cdf = 1.0 - (-(time_elapsed as f64 / lambda).powf(k)).exp();
+
+                cdf.min(1.0)
+            }
+        }
+    }
+
+    /// Find current position in pattern sequence
+    fn find_pattern_position(&self, recent: &[MemoryId], pattern: &[MemoryId]) -> usize {
+        // Look for longest suffix of recent that matches prefix of pattern
+        for suffix_start in 0..recent.len() {
+            let suffix = &recent[suffix_start..];
+            let match_len = suffix.iter()
+                .zip(pattern.iter())
+                .take_while(|(a, b)| a == b)
+                .count();
+
+            if match_len > 0 && match_len == suffix.len() {
+                // Found a match - return next position
+                return match_len;
+            }
+        }
+
+        // No match found - start from beginning
+        0
+    }
+
+    /// Estimate time until next occurrence based on statistical model
+    fn estimate_next_occurrence(&self, model: &IntervalModel, time_elapsed: u64) -> u64 {
+        match model.distribution_type {
+            DistributionType::Normal => {
+                // For normal distribution, use mean if we haven't reached it yet
+                if time_elapsed < model.mean as u64 {
+                    (model.mean as u64).saturating_sub(time_elapsed)
+                } else {
+                    // Already past mean - predict one standard deviation ahead
+                    model.variance.sqrt() as u64
+                }
+            }
+            DistributionType::Exponential => {
+                // Memoryless property - always expect mean wait time
+                model.mean as u64
+            }
+            DistributionType::Gamma | DistributionType::Weibull => {
+                // Use mean as estimate, adjusted by how much time has passed
+                let remaining = (model.mean as u64).saturating_sub(time_elapsed);
+                if remaining > 0 {
+                    remaining
+                } else {
+                    // Overdue - expect soon (within one std deviation)
+                    model.variance.sqrt() as u64
+                }
+            }
+        }
     }
 
     fn merge_and_rank_predictions(&self, predictions: Vec<PredictionResult>) -> Vec<PredictionResult> {
@@ -730,6 +930,16 @@ impl TemporalAnalyzer {
         self.access_window.capacity() * std::mem::size_of::<MemoryAccess>() +
         self.patterns.len() * 256 + // Rough estimate
         self.ngram_frequencies.len() * 128
+    }
+
+    /// Clear all detected patterns and reset analyzer state
+    pub fn clear_all_patterns(&mut self) {
+        self.patterns.clear();
+        self.ngram_frequencies.clear();
+        self.transition_matrix.clear();
+        self.interval_models.clear();
+        self.matcher.active_matches.clear();
+        self.matcher.completed_matches.clear();
     }
 }
 
