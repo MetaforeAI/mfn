@@ -192,7 +192,7 @@ pub extern "C" fn cpe_predict(
     let mut window_entries = Vec::new();
     for entry in context_slice {
         // Create memory access entries for context
-        use mfn_core::{MemoryAccess, AccessType};
+        use mfn_core::layer_interface::{MemoryAccess, AccessType};
         let access = MemoryAccess {
             memory_id: entry.memory_id,
             access_type: AccessType::Read,
@@ -226,7 +226,7 @@ pub extern "C" fn cpe_predict(
         
         output_slice[i] = CpePredictionResult {
             memory_id: pred.predicted_memory.id,
-            confidence: pred.confidence,
+            confidence: pred.confidence as f32,
             predicted_delay_ms: 0.0, // Field no longer available
             pattern_strength: pred.contributing_patterns.len() as f32,
         };
@@ -304,12 +304,17 @@ pub extern "C" fn cpe_health_check(handle: *mut CpeHandle) -> c_int {
     if handle.is_null() {
         return -1;
     }
-    
+
     let handle = unsafe { &mut *handle };
-    
+
     match handle.runtime.block_on(handle.layer.health_check()) {
-        Ok(true) => 1,  // Healthy
-        Ok(false) => 0, // Unhealthy but responsive
+        Ok(health) => {
+            use mfn_core::layer_interface::HealthStatus;
+            match health.status {
+                HealthStatus::Healthy => 1,
+                _ => 0,
+            }
+        }
         Err(_) => -2,   // Error during health check
     }
 }
@@ -328,8 +333,8 @@ mod tests {
     #[test]
     fn test_config_conversion() {
         let c_config = CpeConfig::default();
-        let rust_config = ContextPredictionConfig::from(c_config);
-        
+        let rust_config = ContextPredictionConfig::from(c_config.clone());
+
         assert_eq!(rust_config.max_window_size, c_config.max_window_size);
         assert_eq!(rust_config.cache_size, c_config.cache_size);
     }

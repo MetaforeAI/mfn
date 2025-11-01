@@ -489,47 +489,64 @@ impl MfnLayer for ContextPredictionLayer {
     }
 
     async fn get_performance(&self) -> LayerResult<LayerPerformance> {
-        let metrics = self.performance_metrics.read();
+        // Clone metrics before async operation to drop guard early
+        let (patterns_detected, accuracy_rate, avg_time, predictions_made, cache_hit_rate) = {
+            let metrics = self.performance_metrics.read();
+            (
+                metrics.patterns_detected,
+                metrics.accuracy_rate,
+                metrics.average_prediction_time_us,
+                metrics.predictions_made,
+                metrics.cache_hit_rate,
+            )
+        }; // guard dropped here
+
         let analyzer = self.analyzer.lock().await;
         let stats = analyzer.get_statistics();
         drop(analyzer);
 
         let mut custom_metrics = HashMap::new();
-        custom_metrics.insert("patterns_detected".to_string(), 
-            serde_json::Value::Number(serde_json::Number::from(metrics.patterns_detected)));
-        custom_metrics.insert("accuracy_rate".to_string(), 
-            serde_json::Value::Number(serde_json::Number::from_f64(metrics.accuracy_rate).unwrap()));
-        custom_metrics.insert("total_patterns".to_string(), 
+        custom_metrics.insert("patterns_detected".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(patterns_detected)));
+        custom_metrics.insert("accuracy_rate".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(accuracy_rate).unwrap()));
+        custom_metrics.insert("total_patterns".to_string(),
             serde_json::Value::Number(serde_json::Number::from(stats.total_patterns)));
 
         Ok(LayerPerformance {
             layer_id: LayerId::Layer4,
-            processing_time_us: metrics.average_prediction_time_us,
+            processing_time_us: avg_time,
             memory_usage_bytes: stats.memory_usage_estimate as u64,
-            operations_performed: metrics.predictions_made,
-            cache_hit_rate: Some(metrics.cache_hit_rate),
+            operations_performed: predictions_made,
+            cache_hit_rate: Some(cache_hit_rate),
             custom_metrics,
         })
     }
 
     async fn health_check(&self) -> LayerResult<LayerHealth> {
-        let mut health = self.health_status.write();
-        
-        // Update diagnostics
+        // Get analyzer stats first (before acquiring health lock)
         let analyzer = self.analyzer.lock().await;
         let stats = analyzer.get_statistics();
         drop(analyzer);
-        
-        health.diagnostics.insert("total_patterns".to_string(), 
+
+        // Get metrics snapshot
+        let active_sessions = {
+            let metrics = self.performance_metrics.read();
+            metrics.active_sessions
+        }; // guard dropped here
+
+        // Now update health status
+        let mut health = self.health_status.write();
+
+        health.diagnostics.insert("total_patterns".to_string(),
             serde_json::Value::Number(serde_json::Number::from(stats.total_patterns)));
-        health.diagnostics.insert("active_matches".to_string(), 
+        health.diagnostics.insert("active_matches".to_string(),
             serde_json::Value::Number(serde_json::Number::from(stats.active_matches)));
 
         // Update resource usage
-        let metrics = self.performance_metrics.read();
         health.resource_usage.memory_bytes = stats.memory_usage_estimate as u64;
-        health.resource_usage.active_connections = metrics.active_sessions as u32;
-        
+        health.resource_usage.active_connections = active_sessions as u32;
+
         // Determine health status
         health.status = if stats.average_pattern_confidence > 0.3 {
             HealthStatus::Healthy
@@ -672,9 +689,11 @@ impl ContextPredictionEngine for ContextPredictionLayer {
 
         // Update performance metrics
         {
-            let mut metrics = self.performance_metrics.write();
             let analyzer = self.analyzer.lock().await;
             let stats = analyzer.get_statistics();
+            drop(analyzer); // Drop analyzer before acquiring metrics lock
+
+            let mut metrics = self.performance_metrics.write();
             metrics.patterns_detected = stats.total_patterns as u64;
         }
 
@@ -768,12 +787,12 @@ impl ContextPredictionLayer {
         }
 
         // Check if cache is accessible
-        if self.prediction_cache.try_read().is_err() {
+        if self.prediction_cache.try_read().is_none() {
             return Err(LayerError::TimeoutExceeded { timeout_us: 0 });
         }
 
         // Check window accessibility
-        if self.context_window.try_read().is_err() {
+        if self.context_window.try_read().is_none() {
             return Err(LayerError::TimeoutExceeded { timeout_us: 0 });
         }
 

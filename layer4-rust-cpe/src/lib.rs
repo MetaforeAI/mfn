@@ -96,9 +96,9 @@ mod tests {
     async fn test_layer_creation() {
         let layer = create_layer().await;
         assert!(layer.is_ok());
-        
+
         let layer = layer.unwrap();
-        assert_eq!(layer.layer_id(), LayerId(4));
+        assert_eq!(layer.layer_id(), LayerId::Layer4);
         assert_eq!(layer.layer_name(), "Context Prediction Engine");
     }
 

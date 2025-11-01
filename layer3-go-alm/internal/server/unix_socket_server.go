@@ -282,26 +282,37 @@ func (s *UnixSocketServer) handleSearch(writer *bufio.Writer, req *SocketRequest
 		limit = 10
 	}
 
-	// Perform associative search
-	results, err := s.alm.Search(req.Query, limit)
+	// Create SearchQuery struct
+	ctx := context.Background()
+	searchQuery := &alm.SearchQuery{
+		StartMemoryIDs: []uint64{}, // Empty for general search
+		MaxResults:     limit,
+		MaxDepth:       3,
+		MinWeight:      0.1,
+		Timeout:        30 * time.Second,
+	}
+
+	// Perform associative search with new API
+	results, err := s.alm.SearchAssociative(ctx, searchQuery)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Search failed: %v", err))
 		return
 	}
 
 	// Convert results
-	searchResults := make([]SearchResult, 0, len(results))
+	searchResults := make([]SearchResult, 0, len(results.Results))
 	totalScore := float32(0)
 
-	for _, r := range results {
+	for _, r := range results.Results {
+		score := float32(r.TotalWeight)
 		searchResults = append(searchResults, SearchResult{
-			ID:       r.ID,
-			Content:  r.Content,
-			Score:    r.Score,
-			Distance: r.Distance,
-			Metadata: r.Metadata,
+			ID:       r.Memory.ID,
+			Content:  r.Memory.Content,
+			Score:    score,
+			Distance: r.Depth,
+			Metadata: convertMetadata(r.Memory.Metadata),
 		})
-		totalScore += r.Score
+		totalScore += score
 	}
 
 	// Calculate average confidence
@@ -325,10 +336,40 @@ func (s *UnixSocketServer) handleSearch(writer *bufio.Writer, req *SocketRequest
 	s.sendResponse(writer, &resp)
 }
 
+// convertMetadata converts map[string]string to map[string]interface{}
+func convertMetadata(metadata map[string]string) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range metadata {
+		result[k] = v
+	}
+	return result
+}
+
 // handleAddMemory processes memory addition requests
 func (s *UnixSocketServer) handleAddMemory(writer *bufio.Writer, req *SocketRequest, startTime time.Time) {
+	// Generate unique memory ID
+	memoryID := uint64(time.Now().UnixNano())
+
+	// Convert metadata from map[string]interface{} to map[string]string
+	metadataStr := make(map[string]string)
+	for k, v := range req.Metadata {
+		if strVal, ok := v.(string); ok {
+			metadataStr[k] = strVal
+		} else {
+			metadataStr[k] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	// Create Memory struct
+	memory := &alm.Memory{
+		ID:       memoryID,
+		Content:  req.Content,
+		Tags:     []string{},
+		Metadata: metadataStr,
+	}
+
 	// Add memory to ALM
-	memoryID, err := s.alm.AddMemory(req.Content, req.Metadata)
+	err := s.alm.AddMemory(memory)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Failed to add memory: %v", err))
 		return
@@ -360,13 +401,23 @@ func (s *UnixSocketServer) handleAddAssociation(writer *bufio.Writer, req *Socke
 		return
 	}
 
-	strength := float32(1.0)
+	strength := float64(1.0)
 	if s, ok := req.Metadata["strength"].(float64); ok {
-		strength = float32(s)
+		strength = s
+	}
+
+	// Create Association struct
+	assoc := &alm.Association{
+		ID:           uuid.New().String(),
+		FromMemoryID: uint64(sourceID),
+		ToMemoryID:   uint64(targetID),
+		Type:         "user_defined",
+		Weight:       strength,
+		Reason:       "Added via socket API",
 	}
 
 	// Add association to ALM
-	err := s.alm.AddAssociation(uint64(sourceID), uint64(targetID), strength)
+	err := s.alm.AddAssociation(assoc)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Failed to add association: %v", err))
 		return
@@ -386,7 +437,7 @@ func (s *UnixSocketServer) handleAddAssociation(writer *bufio.Writer, req *Socke
 
 // handleGetStats processes statistics requests
 func (s *UnixSocketServer) handleGetStats(writer *bufio.Writer, req *SocketRequest, startTime time.Time) {
-	stats := s.alm.GetStats()
+	stats := s.alm.GetGraphStats()
 	processingTime := float32(time.Since(startTime).Milliseconds())
 
 	resp := SocketResponse{
@@ -395,9 +446,9 @@ func (s *UnixSocketServer) handleGetStats(writer *bufio.Writer, req *SocketReque
 		Success:          true,
 		ProcessingTimeMs: processingTime,
 		Metadata: map[string]interface{}{
-			"total_memories":    stats.TotalMemories,
+			"total_memories":     stats.TotalMemories,
 			"total_associations": stats.TotalAssociations,
-			"total_queries":     atomic.LoadUint64(&s.totalRequests),
+			"total_queries":      atomic.LoadUint64(&s.totalRequests),
 			"active_connections": atomic.LoadInt32(&s.connCount),
 		},
 	}
