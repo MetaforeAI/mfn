@@ -394,10 +394,20 @@ mod tests {
         let bytes = header.to_bytes();
         let parsed = MessageHeader::from_bytes(&bytes).unwrap();
 
-        assert_eq!(header.magic, parsed.magic);
-        assert_eq!(header.msg_type, parsed.msg_type);
-        assert_eq!(header.correlation_id, parsed.correlation_id);
-        assert_eq!(header.payload_size, parsed.payload_size);
+        // Copy packed fields to local variables to avoid unaligned references
+        let h_magic = header.magic;
+        let h_msg_type = header.msg_type;
+        let h_correlation_id = header.correlation_id;
+        let h_payload_size = header.payload_size;
+        let p_magic = parsed.magic;
+        let p_msg_type = parsed.msg_type;
+        let p_correlation_id = parsed.correlation_id;
+        let p_payload_size = parsed.payload_size;
+
+        assert_eq!(h_magic, p_magic);
+        assert_eq!(h_msg_type, p_msg_type);
+        assert_eq!(h_correlation_id, p_correlation_id);
+        assert_eq!(h_payload_size, p_payload_size);
     }
 
     #[test]
@@ -408,8 +418,14 @@ mod tests {
         let serialized = message.to_bytes(false).unwrap();
         let deserialized = SocketMessage::from_bytes(&serialized).unwrap();
 
-        assert_eq!(message.header.msg_type, deserialized.header.msg_type);
-        assert_eq!(message.header.correlation_id, deserialized.header.correlation_id);
+        // Copy packed fields to local variables to avoid unaligned references
+        let m_msg_type = message.header.msg_type;
+        let m_correlation_id = message.header.correlation_id;
+        let d_msg_type = deserialized.header.msg_type;
+        let d_correlation_id = deserialized.header.correlation_id;
+
+        assert_eq!(m_msg_type, d_msg_type);
+        assert_eq!(m_correlation_id, d_correlation_id);
         assert_eq!(message.payload, deserialized.payload);
     }
 

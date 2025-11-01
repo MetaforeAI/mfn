@@ -71,14 +71,15 @@ pub struct BinaryMessageHeader {
     pub message_type: u16,    // 2 bytes - message type
     pub flags: u16,           // 2 bytes - message flags
     pub payload_length: u32,  // 4 bytes - payload length
-    pub sequence_id: u32,     // 4 bytes - sequence ID
+    pub sequence_id: u16,     // 2 bytes - sequence ID (changed from u32)
+    pub _padding: u16,        // 2 bytes - padding to maintain 16-byte size
 }
 
 impl BinaryMessageHeader {
     pub fn new(
         message_type: BinaryMessageType,
         payload_length: u32,
-        sequence_id: u32,
+        sequence_id: u16,
         flags: u16,
     ) -> Self {
         Self {
@@ -88,6 +89,7 @@ impl BinaryMessageHeader {
             flags,
             payload_length,
             sequence_id,
+            _padding: 0,
         }
     }
 
@@ -123,7 +125,8 @@ impl BinaryMessageHeader {
             message_type: u16::from_le_bytes([bytes[6], bytes[7]]),
             flags: u16::from_le_bytes([bytes[8], bytes[9]]),
             payload_length: u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]),
-            sequence_id: u32::from_le_bytes([bytes[14], bytes[15], 0, 0]),
+            sequence_id: u16::from_le_bytes([bytes[14], bytes[15]]),
+            _padding: 0,
         })
     }
 }
@@ -330,7 +333,7 @@ impl BinarySerializer {
     pub fn create_message(
         &mut self,
         message_type: BinaryMessageType,
-        sequence_id: u32,
+        sequence_id: u16,
     ) -> Result<Vec<u8>> {
         let payload_size = self.buffer.len();
         
@@ -621,15 +624,15 @@ mod tests {
 
         let message = serializer.create_message(
             BinaryMessageType::AddMemory,
-            98765,
+            12345,  // Changed from 98765 to fit in u16
         ).unwrap();
 
         // Deserialize
         let mut deserializer = BinaryDeserializer::new(&message);
         let parsed = deserializer.parse_message().unwrap();
-        
+
         assert_eq!(parsed.message_type().unwrap(), BinaryMessageType::AddMemory);
-        assert_eq!(parsed.header.sequence_id, 98765);
+        assert_eq!(parsed.header.sequence_id, 12345);
 
         let mut payload_deserializer = parsed.payload_deserializer();
         let parsed_memory_id = payload_deserializer.read_u64().unwrap();
