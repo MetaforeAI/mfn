@@ -530,9 +530,14 @@ impl TemporalAnalyzer {
         // Time-based features
         let timestamps: Vec<u64> = accesses.iter().map(|a| a.timestamp).collect();
         if let (Some(&first), Some(&last)) = (timestamps.first(), timestamps.last()) {
+            let duration = if last >= first {
+                last - first
+            } else {
+                0 // Handle case where timestamps are not in order
+            };
             features.push(ContextFeature {
                 feature_type: "duration".to_string(),
-                value: (last - first) as f64,
+                value: duration as f64,
                 weight: 0.7,
             });
         }

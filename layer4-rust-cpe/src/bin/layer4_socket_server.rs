@@ -1,7 +1,7 @@
 #!/usr/bin/env cargo
 /*
 [dependencies]
-mfn_layer4_cpe = { path = ".." }
+layer4_cpe = { path = ".." }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -14,8 +14,9 @@ serde = { version = "1.0", features = ["derive"] }
 use std::sync::Arc;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use mfn_layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig};
-use mfn_core::{UniversalSearchQuery, MemoryId, current_timestamp};
+use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig};
+use mfn_core::{UniversalSearchQuery, MemoryId, current_timestamp, MfnLayer, RoutingDecision};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
@@ -38,22 +39,23 @@ struct ContextResponse {
     data: serde_json::Value,
 }
 
-async fn handle_connection(mut stream: UnixStream, layer: Arc<ContextPredictionLayer>) -> Result<()> {
-    let mut reader = BufReader::new(&mut stream);
+async fn handle_connection(stream: UnixStream, layer: Arc<ContextPredictionLayer>) -> Result<()> {
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
     let mut line = String::new();
-    
+
     loop {
         line.clear();
         let bytes_read = reader.read_line(&mut line).await?;
         if bytes_read == 0 {
             break; // Connection closed
         }
-        
+
         let trimmed_line = line.trim();
         if trimmed_line.is_empty() {
             continue;
         }
-        
+
         // Parse JSON request
         let request: ContextRequest = match serde_json::from_str(trimmed_line) {
             Ok(req) => req,
@@ -67,11 +69,11 @@ async fn handle_connection(mut stream: UnixStream, layer: Arc<ContextPredictionL
                     })
                 };
                 let response_json = serde_json::to_string(&error_response)?;
-                stream.write_all(format!("{}\n", response_json).as_bytes()).await?;
+                write_half.write_all(format!("{}\n", response_json).as_bytes()).await?;
                 continue;
             }
         };
-        
+
         // Handle different request types
         let response = match request.request_type.as_str() {
             "AddMemoryContext" => handle_add_memory_context(&layer, &request).await,
@@ -87,12 +89,12 @@ async fn handle_connection(mut stream: UnixStream, layer: Arc<ContextPredictionL
                 })
             }
         };
-        
+
         // Send response
         let response_json = serde_json::to_string(&response)?;
-        stream.write_all(format!("{}\n", response_json).as_bytes()).await?;
+        write_half.write_all(format!("{}\n", response_json).as_bytes()).await?;
     }
-    
+
     Ok(())
 }
 
@@ -150,28 +152,37 @@ async fn handle_predict_context(
     
     // Create a search query for context prediction
     let query = UniversalSearchQuery {
-        memory_id: MemoryId(0),
-        content: current_context.join(" "),
+        start_memory_ids: vec![],
+        content: Some(current_context.join(" ")),
         embedding: None,
+        tags: vec![],
+        association_types: vec![],
+        max_depth: 3,
         max_results: sequence_length,
-        similarity_threshold: 0.5,
-        context: Some(current_context.clone()),
-        timestamp: current_timestamp(),
-        request_id: request.request_id.clone(),
+        min_weight: 0.5,
+        timeout_us: 10_000_000,
+        layer_params: HashMap::new(),
     };
     
     match layer.search(&query).await {
-        Ok(decision) => ContextResponse {
-            response_type: "PredictContext_Response".to_string(),
-            request_id: request.request_id.clone(),
-            success: true,
-            data: serde_json::json!({
-                "predictions": [],
-                "confidence": decision.confidence,
-                "processing_time_ms": decision.processing_time as f64 / 1_000_000.0,
-                "context": current_context,
-                "predicted_sequence_length": sequence_length
-            })
+        Ok(decision) => {
+            let results = match decision {
+                mfn_core::RoutingDecision::FoundExact { results } => results,
+                mfn_core::RoutingDecision::FoundPartial { results, .. } => results,
+                mfn_core::RoutingDecision::SearchComplete { results } => results,
+                mfn_core::RoutingDecision::RouteToLayers { .. } => vec![],
+            };
+
+            ContextResponse {
+                response_type: "PredictContext_Response".to_string(),
+                request_id: request.request_id.clone(),
+                success: true,
+                data: serde_json::json!({
+                    "predictions": results,
+                    "context": current_context,
+                    "predicted_sequence_length": sequence_length
+                })
+            }
         },
         Err(e) => ContextResponse {
             response_type: "error".to_string(),

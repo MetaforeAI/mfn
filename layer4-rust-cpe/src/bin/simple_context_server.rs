@@ -100,24 +100,25 @@ impl SimpleContextStore {
 }
 
 async fn handle_connection(
-    mut stream: UnixStream, 
+    stream: UnixStream,
     context_store: std::sync::Arc<tokio::sync::Mutex<SimpleContextStore>>
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut reader = BufReader::new(&mut stream);
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
     let mut line = String::new();
-    
+
     loop {
         line.clear();
         let bytes_read = reader.read_line(&mut line).await?;
         if bytes_read == 0 {
             break; // Connection closed
         }
-        
+
         let trimmed_line = line.trim();
         if trimmed_line.is_empty() {
             continue;
         }
-        
+
         // Parse JSON request
         let request: ContextRequest = match serde_json::from_str(trimmed_line) {
             Ok(req) => req,
@@ -131,11 +132,11 @@ async fn handle_connection(
                     })
                 };
                 let response_json = serde_json::to_string(&error_response)?;
-                stream.write_all(format!("{}\n", response_json).as_bytes()).await?;
+                write_half.write_all(format!("{}\n", response_json).as_bytes()).await?;
                 continue;
             }
         };
-        
+
         // Handle different request types
         let response = match request.request_type.as_str() {
             "AddMemoryContext" => handle_add_memory_context(&context_store, &request).await,
@@ -151,12 +152,12 @@ async fn handle_connection(
                 })
             }
         };
-        
+
         // Send response
         let response_json = serde_json::to_string(&response)?;
-        stream.write_all(format!("{}\n", response_json).as_bytes()).await?;
+        write_half.write_all(format!("{}\n", response_json).as_bytes()).await?;
     }
-    
+
     Ok(())
 }
 

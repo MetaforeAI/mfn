@@ -64,6 +64,8 @@ pub use temporal::{
     MemoryAccess,
     TemporalPattern,
     PatternType,
+    PredictionContext,
+    PredictionType,
 };
 
 pub use error::{CpeError, CpeResult};

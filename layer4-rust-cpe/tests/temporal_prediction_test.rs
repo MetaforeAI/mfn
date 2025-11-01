@@ -1,8 +1,9 @@
 /// Integration tests for temporal prediction engine with statistical models
 use layer4_cpe::{
-    TemporalAnalyzer, TemporalConfig, MemoryAccess, AccessType,
+    TemporalAnalyzer, TemporalConfig, MemoryAccess,
     PredictionContext, PredictionType,
 };
+use layer4_cpe::temporal::AccessType;
 use mfn_core::{MemoryId, current_timestamp};
 use std::thread;
 use std::time::Duration;
