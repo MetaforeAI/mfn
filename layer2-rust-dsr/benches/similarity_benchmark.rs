@@ -16,10 +16,10 @@ fn benchmark_similarity_search(c: &mut Criterion) {
 
         // Add 100 memories
         rt.block_on(async {
-            for i in 0..100 {
+            for i in 0..100u64 {
                 let mut values = vec![0.0; *embedding_dim];
                 for (j, val) in values.iter_mut().enumerate() {
-                    *val = ((i * 13 + j * 7) % 100) as f32 / 100.0;
+                    *val = ((i * 13 + j as u64 * 7) % 100) as f32 / 100.0;
                 }
                 let embedding = Array1::from(values);
                 dsr.add_memory(MemoryId(i), &embedding, format!("memory {}", i))
