@@ -1,6 +1,8 @@
 //! Integration tests for the unified socket communication system
 
 use mfn_telepathy::socket::*;
+use mfn_telepathy::socket::server::MessageHandler;
+use mfn_telepathy::socket::client::MultiClient;
 use bytes::Bytes;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -57,7 +59,8 @@ async fn test_socket_server_client_communication() {
     assert!(response.is_ok());
 
     let resp = response.unwrap();
-    assert_eq!(resp.header.msg_type, MessageType::Success as u16);
+    let msg_type = resp.header.msg_type;  // Copy field to avoid packed alignment issue
+    assert_eq!(msg_type, MessageType::Success as u16);
     assert_eq!(resp.payload, test_payload);
 
     // Cleanup
@@ -106,8 +109,12 @@ async fn test_binary_protocol() {
     let serialized = message.to_bytes(false).unwrap();
     let deserialized = SocketMessage::from_bytes(&serialized).unwrap();
 
-    assert_eq!(message.header.msg_type, deserialized.header.msg_type);
-    assert_eq!(message.header.correlation_id, deserialized.header.correlation_id);
+    let orig_msg_type = message.header.msg_type;  // Copy to avoid packed alignment issue
+    let deser_msg_type = deserialized.header.msg_type;
+    let orig_corr_id = message.header.correlation_id;
+    let deser_corr_id = deserialized.header.correlation_id;
+    assert_eq!(orig_msg_type, deser_msg_type);
+    assert_eq!(orig_corr_id, deser_corr_id);
     assert_eq!(message.payload, deserialized.payload);
 
     // With compression
