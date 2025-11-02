@@ -181,6 +181,7 @@ impl MfnOrchestrator {
     }
 
     async fn search_sequential(&self, query: &UniversalSearchQuery) -> LayerResult<UniversalSearchResults> {
+        let search_start = current_timestamp();
         let mut all_results = Vec::new();
         let mut layers_consulted = Vec::new();
         let mut performance_stats = HashMap::new();
@@ -268,7 +269,7 @@ impl MfnOrchestrator {
                             results: all_results,
                             query: query.clone(),
                             total_found,
-                            search_time_us: current_timestamp() - (current_timestamp() - self.performance_monitor.total_query_time_us),
+                            search_time_us: current_timestamp() - search_start,
                             layers_consulted,
                             performance_stats,
                         });
@@ -351,7 +352,7 @@ impl MfnOrchestrator {
             results: all_results,
             query: query.clone(),
             total_found,
-            search_time_us: current_timestamp() - (current_timestamp() - self.performance_monitor.total_query_time_us),
+            search_time_us: current_timestamp() - search_start,
             layers_consulted,
             performance_stats,
         })

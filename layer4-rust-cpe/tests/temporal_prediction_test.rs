@@ -153,12 +153,12 @@ fn test_markov_chain_predictions() {
 
     let mut analyzer = TemporalAnalyzer::new(config);
 
-    // Create clear transition: 300 -> 301 (happens 80% of the time)
-    //                          300 -> 302 (happens 20% of the time)
+    // Create clear transition: 300 -> 301 (happens 63.6% of the time)
+    //                          300 -> 302 (happens 36.4% of the time)
     let base_time = current_timestamp();
 
-    // 300 -> 301 eight times
-    for i in 0..8 {
+    // 300 -> 301 seven times
+    for i in 0..7 {
         let t = base_time + (i * 2_000_000);
         analyzer.add_access(MemoryAccess {
             memory_id: 300,
@@ -178,9 +178,9 @@ fn test_markov_chain_predictions() {
         });
     }
 
-    // 300 -> 302 two times
-    for i in 0..2 {
-        let t = base_time + ((i + 8) * 2_000_000);
+    // 300 -> 302 four times
+    for i in 0..4 {
+        let t = base_time + ((i + 7) * 2_000_000);
         analyzer.add_access(MemoryAccess {
             memory_id: 300,
             timestamp: t,
@@ -212,7 +212,8 @@ fn test_markov_chain_predictions() {
 
     let predictions = analyzer.predict_next(&context);
 
-    // Should predict both 301 and 302, with 301 having higher confidence
+    // Should predict both 301 (63.6%) and 302 (36.4%), with 301 having higher confidence
+    // Both meet the 30% confidence threshold (302 @ 36.4% > 30%)
     let pred_301 = predictions.iter().find(|p| p.memory_id == 301);
     let pred_302 = predictions.iter().find(|p| p.memory_id == 302);
 
