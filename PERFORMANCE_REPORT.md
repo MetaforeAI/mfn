@@ -8,14 +8,17 @@
 
 ## Executive Summary
 
-Comprehensive performance benchmarks were conducted on Layer 2 (DSR - Dynamic Similarity Reservoir) and the Socket Communication layer. All benchmarks show excellent performance characteristics, with sub-millisecond response times for most operations and effective compression for larger payloads.
+Performance benchmarks were conducted on **Layer 2 (DSR - Dynamic Similarity Reservoir)** and the **Socket Communication layer**, which are the most performance-critical components of the MFN system. All benchmarks show excellent performance characteristics, with sub-millisecond response times for most operations and highly effective compression for larger payloads.
+
+**Scope:** This report covers Layer 2 and Socket benchmarks. Layer 1 (Zig IFR), Layer 3 (Go ALM), Layer 4 (Rust CPE), and end-to-end orchestrator benchmarks are recommended for future work (see Recommendations section).
 
 **Key Findings:**
 - ✅ Layer 2 similarity search: **186-270 µs** (0.186-0.270 ms) across embedding dimensions 10-384
 - ✅ Layer 2 memory addition: **825-854 µs** (0.825-0.854 ms) per memory
 - ✅ Socket serialization: **425 ns - 290 µs** depending on payload size
-- ✅ Compression effectiveness: **7-120x** size reduction for large payloads
-- ⚠️ No significant performance bottlenecks detected
+- ✅ Compression effectiveness: **70:1** compression ratio for large payloads (64KB)
+- ✅ Socket throughput: **2.35M messages/sec** for small payloads, **291K msg/sec** for large compressed payloads
+- ⚠️ No significant performance bottlenecks detected in benchmarked components
 
 ---
 
@@ -288,13 +291,37 @@ All benchmarks show performance that **exceeds requirements**. No optimization w
 
 ### 3. Future Benchmarking Priorities 📊
 
-When scaling beyond current usage:
+**Completed:**
+- ✅ Layer 2 (DSR): Similarity search and memory addition benchmarks
+- ✅ Socket Communication: Serialization, deserialization, and compression benchmarks
 
-1. **Layer 2:** Benchmark with 10K, 100K, 1M memories
-2. **Layer 3 (ALM):** Create graph traversal benchmarks
-3. **Layer 4 (CPE):** Benchmark Markov chain prediction at scale
-4. **Orchestrator:** End-to-end latency with all layers active
-5. **Concurrency:** Multi-threaded load testing with Tokio
+**Recommended Next Steps:**
+
+1. **Layer 1 (Zig IFR):** Benchmark exact memory lookups and hash table performance
+   - Target: < 10 µs for exact match retrieval
+   - Test with 1K, 10K, 100K, 1M memories
+
+2. **Layer 3 (Go ALM):** Benchmark graph traversal and association operations
+   - Python benchmark script exists: `layer3-go-alm/benchmark_optimizations.py`
+   - Requires building Go server: `go build -o layer3_alm main.go`
+   - Target: < 500 µs for association queries
+
+3. **Layer 4 (Rust CPE):** Benchmark temporal pattern analysis and predictions
+   - Created `layer4-rust-cpe/benches/prediction_benchmark.rs` (needs API fixes)
+   - Target: < 1ms for prediction generation
+   - Test: Markov chains, n-gram analysis, temporal patterns
+
+4. **End-to-End Orchestrator:** Full stack latency with all 4 layers active
+   - Measure total round-trip time for UniversalSearchQuery
+   - Test routing logic and layer selection
+   - Validate 1-layer, 2-layer, 3-layer, 4-layer search patterns
+
+5. **Layer 2 Scalability:** Test with 10K, 100K, 1M memories in reservoir
+
+6. **Concurrency & Load Testing:** Multi-threaded load testing with Tokio
+   - Concurrent clients hammering socket endpoints
+   - Stress test connection pools
+   - Validate performance under contention
 
 ### 4. Monitoring in Production 📈
 
@@ -401,3 +428,84 @@ The MFN (Memory Flow Network) system demonstrates **excellent performance charac
 **Benchmark Tool:** Criterion.rs v0.5
 **Rust Version:** 1.84.0-nightly (2024-11-21)
 **System:** Linux 6.16.2-arch1-1
+
+---
+
+## Appendix: Benchmark Scope and Limitations
+
+### What Was Benchmarked
+
+**Layer 2 (DSR - Dynamic Similarity Reservoir):**
+- ✅ Similarity search across 100 memories with varying embedding dimensions (10, 50, 100, 384)
+- ✅ Memory addition/storage operations
+- ✅ Performance scaling with embedding dimension size
+- ✅ Statistical analysis with Criterion (100 samples, warming up, outlier detection)
+
+**Socket Communication Layer:**
+- ✅ Binary protocol serialization with/without compression
+- ✅ Binary protocol deserialization with/without compression
+- ✅ Payload sizes from 64 bytes to 64 KB
+- ✅ Compression effectiveness and overhead analysis
+- ✅ Throughput calculations (messages per second)
+
+### What Was NOT Benchmarked
+
+**Layer 1 (Zig IFR - Immediate Facility Registry):**
+- ⏭️ Exact memory lookups not benchmarked
+- ⏭️ Hash table performance not measured
+- **Reason:** Would require Zig build integration
+
+**Layer 3 (Go ALM - Associative Link Matrix):**
+- ⏭️ Graph traversal not benchmarked
+- ⏭️ Association queries not measured
+- **Reason:** Python benchmark script requires running Go server
+- **Note:** Benchmark script exists at `layer3-go-alm/benchmark_optimizations.py`
+
+**Layer 4 (Rust CPE - Context Prediction Engine):**
+- ⏭️ Temporal pattern analysis not benchmarked
+- ⏭️ Markov chain predictions not measured
+- ⏭️ N-gram frequency analysis not tested
+- **Reason:** Benchmark created but failed due to API mismatches in the implementation
+- **Note:** Benchmark file created at `layer4-rust-cpe/benches/prediction_benchmark.rs` (needs updates)
+
+**End-to-End / Orchestrator:**
+- ⏭️ Full-stack latency not measured
+- ⏭️ Multi-layer routing not benchmarked
+- ⏭️ Orchestrator decision logic not timed
+- **Reason:** Requires all layers running simultaneously
+
+**Load Testing:**
+- ⏭️ Concurrent client stress testing not performed
+- ⏭️ Connection pool contention not measured
+- ⏭️ Multi-threaded throughput not benchmarked
+- **Reason:** Time constraints; single-threaded benchmarks completed first
+
+### Why Layer 2 and Sockets Were Prioritized
+
+1. **Performance-Critical:** Socket communication is the foundation for inter-layer communication. Layer 2 performs intensive similarity computations.
+
+2. **Measurable Impact:** These components directly affect user-perceived latency in memory operations.
+
+3. **Optimization Potential:** Both involve numerical computations (embeddings, compression) where micro-optimizations matter.
+
+4. **Production Readiness:** Socket and Layer 2 are most likely to be deployed independently and require performance validation.
+
+### Benchmark Quality Assurance
+
+All benchmarks follow best practices:
+- ✅ **Statistical Rigor:** Criterion.rs with 100+ samples per test
+- ✅ **Warm-up Period:** 3-second warm-up before measurements
+- ✅ **Outlier Detection:** Automatic identification of statistical outliers
+- ✅ **Reproducibility:** Seeds and configurations documented
+- ✅ **Realistic Workloads:** Test data mimics production scenarios
+
+### Future Work
+
+To complete the performance picture:
+1. Fix Layer 4 benchmark API mismatches
+2. Build and run Layer 3 Go server for benchmark script
+3. Create Layer 1 Zig benchmark integration
+4. Implement end-to-end orchestrator benchmarks
+5. Conduct load testing with concurrent clients
+
+**Estimated Time to Complete:** 4-6 hours for a skilled engineer familiar with each layer's API.

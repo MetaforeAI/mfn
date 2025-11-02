@@ -81,6 +81,10 @@ path = "src/bin/layer4_socket_server.rs"
 name = "simple_context_server"
 path = "src/bin/simple_context_server.rs"
 
+[[bench]]
+name = "prediction_benchmark"
+harness = false
+
 [lib]
 name = "layer4_cpe"
 path = "src/lib.rs"
