@@ -113,6 +113,12 @@ impl MfnOrchestrator {
 
     /// Add a memory to the appropriate layers
     pub async fn add_memory(&mut self, memory: UniversalMemory) -> LayerResult<()> {
+        if self.layers.is_empty() {
+            return Err(LayerError::NoLayersRegistered(
+                "Cannot add memory: no layers registered".into()
+            ));
+        }
+
         // Add to all layers that can store memories
         for (layer_id, layer_ref) in &self.layers {
             let mut layer = layer_ref.write().await;
@@ -181,6 +187,12 @@ impl MfnOrchestrator {
     }
 
     async fn search_sequential(&self, query: &UniversalSearchQuery) -> LayerResult<UniversalSearchResults> {
+        if self.layers.is_empty() {
+            return Err(LayerError::NoLayersRegistered(
+                "Cannot search: no layers registered".into()
+            ));
+        }
+
         let search_start = current_timestamp();
         let mut all_results = Vec::new();
         let mut layers_consulted = Vec::new();

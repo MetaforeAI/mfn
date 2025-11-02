@@ -36,6 +36,9 @@ pub enum LayerError {
     
     #[error("Task timeout")]
     TaskTimeout(#[from] tokio::time::error::Elapsed),
+
+    #[error("No layers registered: {0}")]
+    NoLayersRegistered(String),
 }
 
 pub type LayerResult<T> = Result<T, LayerError>;
