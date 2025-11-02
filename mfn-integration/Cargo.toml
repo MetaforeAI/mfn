@@ -13,11 +13,12 @@ categories = ["algorithms", "science", "web-programming"]
 [dependencies]
 # MFN Core and Layers
 mfn-core = { path = "../mfn-core" }
-layer4-context-engine = { path = "../layer4-context-engine" }
+layer4-rust-cpe = { path = "../layer4-rust-cpe" }
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 async-trait = "0.1.77"
+futures = "0.3"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -29,6 +30,9 @@ reqwest = { version = "0.11", features = ["json"] }
 # FFI and process communication
 libc = "0.2"
 
+# For socket clients
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
 # Error handling
 thiserror = "1.0"
 anyhow = "1.0"
@@ -36,6 +40,7 @@ anyhow = "1.0"
 # Logging
 log = "0.4"
 env_logger = "0.10"
+tracing = "0.1"
 
 # Time and measurements
 chrono = { version = "0.4", features = ["serde"] }

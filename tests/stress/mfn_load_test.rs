@@ -2,15 +2,20 @@
 //!
 //! This test spawns multiple concurrent clients hammering the actual MFN layers
 //! and measures real performance under load.
+//!
+//! IMPORTANT: Requires all layer servers to be running!
+//! Run: ./scripts/start_all_layers.sh before running these tests
 
+use mfn_integration::socket_integration::SocketMfnIntegration;
 use mfn_core::{
-    MfnOrchestrator, UniversalMemory, MemoryId,
+    UniversalMemory, MemoryId,
     UniversalSearchQuery, Weight, AssociationType,
 };
 use std::collections::HashMap;
 use tokio::time::{Duration, Instant};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use anyhow::Result;
 
 /// Stress test configuration
 struct StressConfig {
@@ -22,6 +27,34 @@ struct StressConfig {
     duration: Duration,
     /// Memory size (for memory operations)
     memory_count: usize,
+}
+
+/// Initialize MFN system with all layers
+async fn create_mfn_system() -> Result<Arc<SocketMfnIntegration>> {
+    println!("🔧 Initializing MFN System with socket connections...");
+
+    let system = SocketMfnIntegration::new().await
+        .map_err(|e| {
+            eprintln!("❌ Failed to create MFN system: {}", e);
+            eprintln!("   Make sure all layer servers are running:");
+            eprintln!("   Run: ./scripts/start_all_layers.sh");
+            e
+        })?;
+
+    system.initialize_all_layers().await
+        .map_err(|e| {
+            eprintln!("❌ Failed to connect to layers: {}", e);
+            eprintln!("   Some layers may not be running.");
+            eprintln!("   Check that all socket servers are listening:");
+            eprintln!("   - Layer 1 (Zig IFR): /tmp/layer1_ifr.sock");
+            eprintln!("   - Layer 2 (Rust DSR): /tmp/layer2_dsr.sock");
+            eprintln!("   - Layer 3 (Go ALM): /tmp/layer3_alm.sock");
+            eprintln!("   - Layer 4 (Rust CPE): /tmp/layer4_cpe.sock");
+            e
+        })?;
+
+    println!("✅ MFN System initialized successfully");
+    Ok(Arc::new(system))
 }
 
 /// Test results
@@ -68,11 +101,11 @@ impl StressResults {
 }
 
 /// Run a memory addition stress test
-async fn stress_test_memory_addition(config: StressConfig) -> StressResults {
+async fn stress_test_memory_addition(config: StressConfig) -> Result<StressResults> {
     println!("\n🔥 MEMORY ADDITION STRESS TEST");
     println!("Clients: {}, Requests/Client: {}", config.num_clients, config.requests_per_client);
 
-    let orchestrator = Arc::new(tokio::sync::RwLock::new(MfnOrchestrator::new()));
+    let system = create_mfn_system().await?;
 
     let success_count = Arc::new(AtomicU64::new(0));
     let fail_count = Arc::new(AtomicU64::new(0));
@@ -83,7 +116,7 @@ async fn stress_test_memory_addition(config: StressConfig) -> StressResults {
     // Spawn concurrent clients
     let mut handles = vec![];
     for client_id in 0..config.num_clients {
-        let orch = orchestrator.clone();
+        let sys = system.clone();
         let success = success_count.clone();
         let fail = fail_count.clone();
         let requests = config.requests_per_client;
@@ -100,7 +133,7 @@ async fn stress_test_memory_addition(config: StressConfig) -> StressResults {
                     format!("Client {} Memory {}", client_id, i),
                 );
 
-                match orch.write().await.add_memory(memory).await {
+                match sys.add_memory(memory).await {
                     Ok(_) => {
                         success.fetch_add(1, Ordering::Relaxed);
                     }
@@ -140,7 +173,7 @@ async fn stress_test_memory_addition(config: StressConfig) -> StressResults {
     let p95_latency = latencies[(latencies.len() as f64 * 0.95) as usize];
     let p99_latency = latencies[(latencies.len() as f64 * 0.99) as usize];
 
-    StressResults {
+    Ok(StressResults {
         total_requests: total_requests as u64,
         successful_requests: success_count.load(Ordering::Relaxed),
         failed_requests: fail_count.load(Ordering::Relaxed),
@@ -152,15 +185,15 @@ async fn stress_test_memory_addition(config: StressConfig) -> StressResults {
         p95_latency,
         p99_latency,
         requests_per_second: total_requests as f64 / total_duration.as_secs_f64(),
-    }
+    })
 }
 
 /// Run a search stress test
-async fn stress_test_search(config: StressConfig) -> StressResults {
+async fn stress_test_search(config: StressConfig) -> Result<StressResults> {
     println!("\n🔍 SEARCH STRESS TEST");
     println!("Clients: {}, Requests/Client: {}", config.num_clients, config.requests_per_client);
 
-    let orchestrator = Arc::new(tokio::sync::RwLock::new(MfnOrchestrator::new()));
+    let system = create_mfn_system().await?;
 
     // Pre-populate with memories
     println!("Populating {} memories...", config.memory_count);
@@ -169,7 +202,7 @@ async fn stress_test_search(config: StressConfig) -> StressResults {
             i as u64,
             format!("Test Memory {}", i),
         );
-        orchestrator.write().await.add_memory(memory).await.unwrap();
+        system.add_memory(memory).await?;
     }
     println!("Population complete. Starting search stress test...");
 
@@ -182,7 +215,7 @@ async fn stress_test_search(config: StressConfig) -> StressResults {
     // Spawn concurrent search clients
     let mut handles = vec![];
     for client_id in 0..config.num_clients {
-        let orch = orchestrator.clone();
+        let sys = system.clone();
         let success = success_count.clone();
         let fail = fail_count.clone();
         let requests = config.requests_per_client;
@@ -206,7 +239,7 @@ async fn stress_test_search(config: StressConfig) -> StressResults {
                     layer_params: HashMap::new(),
                 };
 
-                match orch.write().await.search(query).await {
+                match sys.search(query).await {
                     Ok(_) => {
                         success.fetch_add(1, Ordering::Relaxed);
                     }
@@ -246,7 +279,7 @@ async fn stress_test_search(config: StressConfig) -> StressResults {
     let p95_latency = latencies[(latencies.len() as f64 * 0.95) as usize];
     let p99_latency = latencies[(latencies.len() as f64 * 0.99) as usize];
 
-    StressResults {
+    Ok(StressResults {
         total_requests: total_requests as u64,
         successful_requests: success_count.load(Ordering::Relaxed),
         failed_requests: fail_count.load(Ordering::Relaxed),
@@ -258,15 +291,15 @@ async fn stress_test_search(config: StressConfig) -> StressResults {
         p95_latency,
         p99_latency,
         requests_per_second: total_requests as f64 / total_duration.as_secs_f64(),
-    }
+    })
 }
 
 /// Run a mixed workload stress test
-async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
+async fn stress_test_mixed_workload(config: StressConfig) -> Result<StressResults> {
     println!("\n⚡ MIXED WORKLOAD STRESS TEST");
     println!("Clients: {}, Requests/Client: {}", config.num_clients, config.requests_per_client);
 
-    let orchestrator = Arc::new(tokio::sync::RwLock::new(MfnOrchestrator::new()));
+    let system = create_mfn_system().await?;
 
     // Pre-populate
     println!("Populating {} memories...", config.memory_count);
@@ -275,7 +308,7 @@ async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
             i as u64,
             format!("Test Memory {}", i),
         );
-        orchestrator.write().await.add_memory(memory).await.unwrap();
+        system.add_memory(memory).await?;
     }
 
     let success_count = Arc::new(AtomicU64::new(0));
@@ -287,7 +320,7 @@ async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
     // Spawn mixed workload clients (50% add, 50% search)
     let mut handles = vec![];
     for client_id in 0..config.num_clients {
-        let orch = orchestrator.clone();
+        let sys = system.clone();
         let success = success_count.clone();
         let fail = fail_count.clone();
         let requests = config.requests_per_client;
@@ -307,7 +340,7 @@ async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
                         memory_id,
                         format!("Dynamic Memory {}", memory_id),
                     );
-                    orch.write().await.add_memory(memory).await
+                    sys.add_memory(memory).await
                 } else {
                     // Search operation
                     let query = UniversalSearchQuery {
@@ -322,7 +355,7 @@ async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
                         timeout_us: 20_000,
                         layer_params: HashMap::new(),
                     };
-                    orch.write().await.search(query).await.map(|_| ())
+                    sys.search(query).await.map(|_| ())
                 };
 
                 match result {
@@ -352,7 +385,7 @@ async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
     latencies.sort();
     let total_requests = config.num_clients * config.requests_per_client;
 
-    StressResults {
+    Ok(StressResults {
         total_requests: total_requests as u64,
         successful_requests: success_count.load(Ordering::Relaxed),
         failed_requests: fail_count.load(Ordering::Relaxed),
@@ -366,7 +399,7 @@ async fn stress_test_mixed_workload(config: StressConfig) -> StressResults {
         p95_latency: latencies[(latencies.len() as f64 * 0.95) as usize],
         p99_latency: latencies[(latencies.len() as f64 * 0.99) as usize],
         requests_per_second: total_requests as f64 / total_duration.as_secs_f64(),
-    }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -378,7 +411,16 @@ async fn stress_test_light_load() {
         memory_count: 100,
     };
 
-    let results = stress_test_memory_addition(config).await;
+    let results = match stress_test_memory_addition(config).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Test failed to initialize: {}", e);
+            eprintln!("Make sure all layer servers are running:");
+            eprintln!("Run: ./scripts/start_all_layers.sh");
+            panic!("Failed to initialize MFN system");
+        }
+    };
+
     results.print();
 
     assert!(results.successful_requests > 0, "No successful requests!");
@@ -394,7 +436,16 @@ async fn stress_test_medium_load() {
         memory_count: 500,
     };
 
-    let results = stress_test_search(config).await;
+    let results = match stress_test_search(config).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Test failed to initialize: {}", e);
+            eprintln!("Make sure all layer servers are running:");
+            eprintln!("Run: ./scripts/start_all_layers.sh");
+            panic!("Failed to initialize MFN system");
+        }
+    };
+
     results.print();
 
     assert!(results.successful_requests > 0);
@@ -410,7 +461,16 @@ async fn stress_test_heavy_load() {
         memory_count: 1000,
     };
 
-    let results = stress_test_mixed_workload(config).await;
+    let results = match stress_test_mixed_workload(config).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Test failed to initialize: {}", e);
+            eprintln!("Make sure all layer servers are running:");
+            eprintln!("Run: ./scripts/start_all_layers.sh");
+            panic!("Failed to initialize MFN system");
+        }
+    };
+
     results.print();
 
     assert!(results.successful_requests > 9000, "Too many failures: {}", results.failed_requests);
@@ -428,7 +488,16 @@ async fn stress_test_extreme_load() {
     };
 
     println!("\n💥 EXTREME LOAD TEST - 100,000 REQUESTS");
-    let results = stress_test_mixed_workload(config).await;
+    let results = match stress_test_mixed_workload(config).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Test failed to initialize: {}", e);
+            eprintln!("Make sure all layer servers are running:");
+            eprintln!("Run: ./scripts/start_all_layers.sh");
+            panic!("Failed to initialize MFN system");
+        }
+    };
+
     results.print();
 
     // Just ensure system doesn't crash

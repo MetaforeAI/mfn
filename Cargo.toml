@@ -11,11 +11,13 @@ members = [
     "layer2-rust-dsr",
     "layer4-rust-cpe",
     "mfn-core",
+    "mfn-integration",
 ]
 
 [dependencies]
 # MFN Core
 mfn-core = { path = "mfn-core" }
+mfn-integration = { path = "mfn-integration" }
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
@@ -59,6 +61,7 @@ mockall = { version = "0.12", optional = true }
 tokio-test = "0.4"
 proptest = "1.4"
 criterion = "0.5"
+futures = "0.3"
 
 [features]
 default = ["monitoring"]
@@ -90,3 +93,7 @@ harness = false
 [[test]]
 name = "mfn_load_test"
 path = "tests/stress/mfn_load_test.rs"
+
+[[test]]
+name = "full_system_test"
+path = "tests/integration/full_system_test.rs"

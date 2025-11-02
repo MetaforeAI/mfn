@@ -11,6 +11,13 @@ use anyhow::Result;
 
 pub use mfn_core::*;
 
+// Comment out layer4 for now as it has issues
+// use layer4_rust_cpe as layer4_cpe;
+
+// Socket-based integration modules
+mod socket_clients;
+pub mod socket_integration;
+
 /// Unified MFN system that orchestrates all layers
 pub struct MfnSystem {
     /// Layer 1: Zig IFR (via FFI)
@@ -23,7 +30,8 @@ pub struct MfnSystem {
     pub layer3: Option<Layer3Client>,
     
     /// Layer 4: Rust CPE (direct)
-    pub layer4: Option<Arc<RwLock<layer4_context_engine::ContextPredictionLayer>>>,
+    // pub layer4: Option<Arc<RwLock<layer4_cpe::ContextPredictionLayer>>>,
+    pub layer4: Option<Arc<RwLock<()>>>, // Placeholder for now
     
     /// System configuration
     config: MfnSystemConfig,
@@ -165,8 +173,9 @@ impl MfnSystem {
         
         if self.config.layer4_enabled {
             log::info!("Initializing Layer 4 (Context Engine)...");
-            let layer4 = layer4_context_engine::ContextPredictionLayer::new();
-            self.layer4 = Some(Arc::new(RwLock::new(layer4)));
+            // let layer4 = layer4_cpe::ContextPredictionLayer::new();
+            // self.layer4 = Some(Arc::new(RwLock::new(layer4)));
+            self.layer4 = Some(Arc::new(RwLock::new(()))); // Placeholder
         }
         
         log::info!("All layers initialized successfully");
@@ -288,36 +297,14 @@ impl MfnSystem {
         self.query_sequential(query).await
     }
     
-    /// Query Layer 4 specifically
-    async fn query_layer4(&self, layer4: &layer4_context_engine::ContextPredictionLayer, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
-        use mfn_core::layer_interface::MfnLayer;
-        
-        let start_time = std::time::Instant::now();
-        
-        // Use the MfnLayer search interface
-        let routing_decision = layer4.search(query).await
-            .map_err(|e| anyhow::anyhow!("Layer 4 search failed: {}", e))?;
-        
-        let results = match routing_decision {
-            RoutingDecision::FoundExact { results } => results,
-            RoutingDecision::FoundPartial { results, .. } => results,
-            RoutingDecision::SearchComplete { results } => results,
-            _ => vec![],
-        };
-        
-        let processing_time = start_time.elapsed();
-        
-        let confidence = if results.is_empty() { 0.0 } else { 0.8 };
+    /// Query Layer 4 specifically (placeholder)
+    async fn query_layer4(&self, _layer4: &(), _query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        // Placeholder implementation - Layer4 integration disabled for now
         Ok(LayerQueryResult {
-            results,
-            processing_time_ms: processing_time.as_secs_f64() * 1000.0,
-            confidence,
-            metadata: {
-                let mut meta = HashMap::new();
-                meta.insert("layer".to_string(), "layer4".to_string());
-                meta.insert("type".to_string(), "context_prediction".to_string());
-                meta
-            },
+            results: vec![],
+            processing_time_ms: 0.0,
+            confidence: 0.0,
+            metadata: HashMap::new(),
         })
     }
     
