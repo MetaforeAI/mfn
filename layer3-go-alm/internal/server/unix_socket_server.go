@@ -6,8 +6,10 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -214,9 +216,6 @@ func (s *UnixSocketServer) handleConnection(conn net.Conn, connID string) {
 
 	log.Printf("🔗 New connection: %s", connID)
 
-	reader := bufio.NewReader(conn)
-	writer := bufio.NewWriter(conn)
-
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -227,25 +226,41 @@ func (s *UnixSocketServer) handleConnection(conn net.Conn, connID string) {
 		// Set read deadline
 		conn.SetReadDeadline(time.Now().Add(RequestTimeout))
 
-		// Read request line
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			if err != net.ErrClosed && s.ctx.Err() == nil {
+		// Read 4-byte length prefix (binary protocol)
+		var lenBuf [4]byte
+		if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+			if err != io.EOF && err != net.ErrClosed && s.ctx.Err() == nil {
 				log.Printf("Error reading from connection %s: %v", connID, err)
 			}
 			return
 		}
 
+		// Decode message length (little-endian u32)
+		msgLen := binary.LittleEndian.Uint32(lenBuf[:])
+
+		// Sanity check
+		if msgLen == 0 || msgLen > 10000000 {
+			log.Printf("Invalid message length from %s: %d", connID, msgLen)
+			return
+		}
+
+		// Read message payload
+		msgBuf := make([]byte, msgLen)
+		if _, err := io.ReadFull(conn, msgBuf); err != nil {
+			log.Printf("Error reading message from %s: %v", connID, err)
+			return
+		}
+
 		// Parse JSON request
 		var req SocketRequest
-		if err := json.Unmarshal(line, &req); err != nil {
-			s.sendError(writer, "", fmt.Sprintf("Invalid JSON: %v", err))
+		if err := json.Unmarshal(msgBuf, &req); err != nil {
+			s.sendErrorBinary(conn, "", fmt.Sprintf("Invalid JSON: %v", err))
 			continue
 		}
 
 		// Process request
 		atomic.AddUint64(&s.totalRequests, 1)
-		s.processRequest(writer, &req)
+		s.processRequestBinary(conn, &req)
 	}
 }
 
@@ -501,4 +516,249 @@ func (s *UnixSocketServer) sendError(writer *bufio.Writer, requestID string, err
 
 	s.sendResponse(writer, &resp)
 	atomic.AddUint64(&s.totalErrors, 1)
+}
+
+// sendErrorBinary sends an error response using binary protocol
+func (s *UnixSocketServer) sendErrorBinary(conn net.Conn, requestID string, errMsg string) {
+	resp := SocketResponse{
+		Type:      "error",
+		RequestID: requestID,
+		Success:   false,
+		Error:     errMsg,
+	}
+
+	s.sendResponseBinary(conn, &resp)
+	atomic.AddUint64(&s.totalErrors, 1)
+}
+
+// sendResponseBinary sends a binary protocol response
+func (s *UnixSocketServer) sendResponseBinary(conn net.Conn, resp *SocketResponse) {
+	data, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("Failed to marshal response: %v", err)
+		return
+	}
+
+	// Write length prefix (4 bytes, little-endian u32)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(data)))
+
+	if _, err := conn.Write(lenBuf[:]); err != nil {
+		log.Printf("Failed to write response length: %v", err)
+		return
+	}
+
+	// Write response data
+	if _, err := conn.Write(data); err != nil {
+		log.Printf("Failed to write response data: %v", err)
+		return
+	}
+
+	atomic.AddUint64(&s.totalResponses, 1)
+}
+
+// processRequestBinary handles individual requests using binary protocol
+func (s *UnixSocketServer) processRequestBinary(conn net.Conn, req *SocketRequest) {
+	startTime := time.Now()
+
+	switch req.Type {
+	case "search":
+		s.handleSearchBinary(conn, req, startTime)
+
+	case "add_memory":
+		s.handleAddMemoryBinary(conn, req, startTime)
+
+	case "add_association":
+		s.handleAddAssociationBinary(conn, req, startTime)
+
+	case "get_stats":
+		s.handleGetStatsBinary(conn, req, startTime)
+
+	case "ping":
+		s.handlePingBinary(conn, req, startTime)
+
+	default:
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Unknown request type: %s", req.Type))
+	}
+}
+
+// Binary protocol versions of handlers
+func (s *UnixSocketServer) handleSearchBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	// Prepare search parameters
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	// Create SearchQuery struct
+	ctx := context.Background()
+	searchQuery := &alm.SearchQuery{
+		StartMemoryIDs: []uint64{},
+		MaxResults:     limit,
+		MaxDepth:       3,
+		MinWeight:      0.1,
+		Timeout:        30 * time.Second,
+	}
+
+	// Perform associative search
+	results, err := s.alm.SearchAssociative(ctx, searchQuery)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Search failed: %v", err))
+		return
+	}
+
+	// Convert results
+	searchResults := make([]SearchResult, 0, len(results.Results))
+	totalScore := float32(0)
+
+	for _, r := range results.Results {
+		score := float32(r.TotalWeight)
+		searchResults = append(searchResults, SearchResult{
+			ID:       r.Memory.ID,
+			Content:  r.Memory.Content,
+			Score:    score,
+			Distance: r.Depth,
+			Metadata: convertMetadata(r.Memory.Metadata),
+		})
+		totalScore += score
+	}
+
+	// Calculate average confidence
+	confidence := float32(0)
+	if len(searchResults) > 0 {
+		confidence = totalScore / float32(len(searchResults))
+	}
+
+	// Send response
+	processingTime := float32(time.Since(startTime).Milliseconds())
+
+	resp := SocketResponse{
+		Type:             "search_response",
+		RequestID:        req.RequestID,
+		Success:          true,
+		Results:          searchResults,
+		Confidence:       confidence,
+		ProcessingTimeMs: processingTime,
+	}
+
+	s.sendResponseBinary(conn, &resp)
+}
+
+func (s *UnixSocketServer) handleAddMemoryBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	memoryID := uint64(time.Now().UnixNano())
+
+	metadataStr := make(map[string]string)
+	for k, v := range req.Metadata {
+		if strVal, ok := v.(string); ok {
+			metadataStr[k] = strVal
+		} else {
+			metadataStr[k] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	memory := &alm.Memory{
+		ID:       memoryID,
+		Content:  req.Content,
+		Tags:     []string{},
+		Metadata: metadataStr,
+	}
+
+	err := s.alm.AddMemory(memory)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Failed to add memory: %v", err))
+		return
+	}
+
+	processingTime := float32(time.Since(startTime).Milliseconds())
+
+	resp := SocketResponse{
+		Type:             "add_memory_response",
+		RequestID:        req.RequestID,
+		Success:          true,
+		ProcessingTimeMs: processingTime,
+		Metadata: map[string]interface{}{
+			"memory_id": memoryID,
+		},
+	}
+
+	s.sendResponseBinary(conn, &resp)
+}
+
+func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	sourceID, sourceOk := req.Metadata["source_id"].(float64)
+	targetID, targetOk := req.Metadata["target_id"].(float64)
+
+	if !sourceOk || !targetOk {
+		s.sendErrorBinary(conn, req.RequestID, "Missing or invalid source_id/target_id")
+		return
+	}
+
+	strength := float64(1.0)
+	if s, ok := req.Metadata["strength"].(float64); ok {
+		strength = s
+	}
+
+	assoc := &alm.Association{
+		ID:           uuid.New().String(),
+		FromMemoryID: uint64(sourceID),
+		ToMemoryID:   uint64(targetID),
+		Type:         "user_defined",
+		Weight:       strength,
+		Reason:       "Added via socket API",
+	}
+
+	err := s.alm.AddAssociation(assoc)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Failed to add association: %v", err))
+		return
+	}
+
+	processingTime := float32(time.Since(startTime).Milliseconds())
+
+	resp := SocketResponse{
+		Type:             "add_association_response",
+		RequestID:        req.RequestID,
+		Success:          true,
+		ProcessingTimeMs: processingTime,
+	}
+
+	s.sendResponseBinary(conn, &resp)
+}
+
+func (s *UnixSocketServer) handleGetStatsBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	stats := s.alm.GetGraphStats()
+	processingTime := float32(time.Since(startTime).Milliseconds())
+
+	resp := SocketResponse{
+		Type:             "stats_response",
+		RequestID:        req.RequestID,
+		Success:          true,
+		ProcessingTimeMs: processingTime,
+		Metadata: map[string]interface{}{
+			"total_memories":     stats.TotalMemories,
+			"total_associations": stats.TotalAssociations,
+			"total_queries":      atomic.LoadUint64(&s.totalRequests),
+			"active_connections": atomic.LoadInt32(&s.connCount),
+		},
+	}
+
+	s.sendResponseBinary(conn, &resp)
+}
+
+func (s *UnixSocketServer) handlePingBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	processingTime := float32(time.Since(startTime).Milliseconds())
+
+	resp := SocketResponse{
+		Type:             "pong",
+		RequestID:        req.RequestID,
+		Success:          true,
+		ProcessingTimeMs: processingTime,
+		Metadata: map[string]interface{}{
+			"layer":     "Layer3-ALM",
+			"version":   "1.0.0",
+			"timestamp": time.Now().Unix(),
+		},
+	}
+
+	s.sendResponseBinary(conn, &resp)
 }

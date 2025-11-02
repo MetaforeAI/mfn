@@ -40,24 +40,50 @@ struct ContextResponse {
 }
 
 async fn handle_connection(stream: UnixStream, layer: Arc<ContextPredictionLayer>) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
+    use tokio::io::AsyncReadExt;
+
+    let (mut read_half, mut write_half) = stream.into_split();
 
     loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line).await?;
-        if bytes_read == 0 {
-            break; // Connection closed
+        // Read 4-byte length prefix (binary protocol)
+        let mut len_buf = [0u8; 4];
+        match read_half.read_exact(&mut len_buf).await {
+            Ok(_) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // Connection closed
+                break;
+            },
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to read length: {}", e));
+            }
         }
 
-        let trimmed_line = line.trim();
-        if trimmed_line.is_empty() {
-            continue;
+        let msg_len = u32::from_le_bytes(len_buf) as usize;
+
+        // Sanity check on message length
+        if msg_len == 0 || msg_len > 10_000_000 {
+            eprintln!("Invalid message length: {}", msg_len);
+            break;
         }
+
+        // Read message payload
+        let mut msg_buf = vec![0u8; msg_len];
+        if let Err(e) = read_half.read_exact(&mut msg_buf).await {
+            eprintln!("Failed to read message: {}", e);
+            break;
+        }
+
+        // Parse as UTF-8 string
+        let msg_str = match std::str::from_utf8(&msg_buf) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Invalid UTF-8: {}", e);
+                break;
+            }
+        };
 
         // Parse JSON request
-        let request: ContextRequest = match serde_json::from_str(trimmed_line) {
+        let request: ContextRequest = match serde_json::from_str(msg_str) {
             Ok(req) => req,
             Err(e) => {
                 let error_response = ContextResponse {
@@ -69,7 +95,10 @@ async fn handle_connection(stream: UnixStream, layer: Arc<ContextPredictionLayer
                     })
                 };
                 let response_json = serde_json::to_string(&error_response)?;
-                write_half.write_all(format!("{}\n", response_json).as_bytes()).await?;
+                let response_bytes = response_json.as_bytes();
+                let response_len = response_bytes.len() as u32;
+                write_half.write_all(&response_len.to_le_bytes()).await?;
+                write_half.write_all(response_bytes).await?;
                 continue;
             }
         };
@@ -90,9 +119,13 @@ async fn handle_connection(stream: UnixStream, layer: Arc<ContextPredictionLayer
             }
         };
 
-        // Send response
+        // Send binary response: length (4 bytes) + JSON
         let response_json = serde_json::to_string(&response)?;
-        write_half.write_all(format!("{}\n", response_json).as_bytes()).await?;
+        let response_bytes = response_json.as_bytes();
+        let response_len = response_bytes.len() as u32;
+
+        write_half.write_all(&response_len.to_le_bytes()).await?;
+        write_half.write_all(response_bytes).await?;
     }
 
     Ok(())

@@ -332,88 +332,111 @@ impl SocketServer {
 
     /// Handle a single connection
     async fn handle_connection(
-        mut stream: UnixStream,
+        stream: UnixStream,
         connection_id: String,
         dsr: Arc<DynamicSimilarityReservoir>,
         config: SocketServerConfig,
         connections: Arc<RwLock<HashMap<String, ConnectionStats>>>,
         total_requests: Arc<RwLock<u64>>,
     ) -> Result<()> {
-        let (stream_read, mut stream_write) = stream.split();
-        let mut reader = BufReader::new(stream_read);
-        let mut line_buffer = String::new();
+        use tokio::io::AsyncReadExt;
+
+        let (mut stream_read, mut stream_write) = stream.into_split();
 
         debug!("Connection {} established", connection_id);
 
         loop {
-            // Read line with timeout
-            line_buffer.clear();
-            
+            // Try to detect protocol by reading first 4 bytes
+            let mut peek_buf = [0u8; 4];
+
             let read_result = tokio::time::timeout(
                 Duration::from_millis(config.connection_timeout_ms),
-                reader.read_line(&mut line_buffer)
+                stream_read.read_exact(&mut peek_buf)
             ).await;
 
             match read_result {
-                Ok(Ok(0)) => {
-                    // Connection closed
-                    debug!("Connection {} closed by client", connection_id);
-                    break;
-                },
                 Ok(Ok(_)) => {
-                    let line = line_buffer.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
+                    // Check if this looks like a length prefix (binary protocol)
+                    // Length-prefixed protocol: 4 bytes for length (u32 LE)
+                    let potential_len = u32::from_le_bytes(peek_buf);
 
-                    // Update connection stats
-                    {
-                        let mut conns = connections.write().await;
-                        if let Some(stats) = conns.get_mut(&connection_id) {
-                            stats.bytes_received += line.len() as u64;
-                            stats.last_activity = Instant::now();
-                            stats.requests_processed += 1;
-                            
-                            // Auto-detect protocol type
-                            if stats.protocol_type == "auto-detect" {
-                                stats.protocol_type = if line.starts_with('{') {
-                                    "JSON"
-                                } else {
-                                    "Binary"
-                                }.to_string();
+                    // If the length seems reasonable (< 10MB), treat as binary protocol
+                    if potential_len > 0 && potential_len < 10_000_000 {
+                        // Binary protocol detected
+                        let msg_len = potential_len as usize;
+
+                        // Read the message payload
+                        let mut msg_buf = vec![0u8; msg_len];
+                        if let Err(e) = stream_read.read_exact(&mut msg_buf).await {
+                            error!("Connection {} failed to read binary message: {}", connection_id, e);
+                            break;
+                        }
+
+                        // Update connection stats
+                        {
+                            let mut conns = connections.write().await;
+                            if let Some(stats) = conns.get_mut(&connection_id) {
+                                stats.bytes_received += (4 + msg_len) as u64;
+                                stats.last_activity = Instant::now();
+                                stats.requests_processed += 1;
+                                stats.protocol_type = "Binary".to_string();
                             }
                         }
-                    }
 
-                    // Process request
-                    let response = Self::process_request_line(
-                        line,
-                        &dsr,
-                        &config,
-                    ).await;
+                        // Parse as JSON
+                        let line = match std::str::from_utf8(&msg_buf) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                error!("Connection {} invalid UTF-8 in binary message: {}", connection_id, e);
+                                break;
+                            }
+                        };
 
-                    // Send response
-                    let response_line = format!("{}\n", response);
-                    if let Err(e) = stream_write.write_all(response_line.as_bytes()).await {
-                        error!("Failed to write response: {}", e);
-                        break;
-                    }
+                        // Process request
+                        let response = Self::process_request_line(
+                            line.trim(),
+                            &dsr,
+                            &config,
+                        ).await;
 
-                    // Update stats
-                    {
-                        let mut total = total_requests.write().await;
-                        *total += 1;
-                    }
+                        // Send binary response: length (4 bytes) + JSON
+                        let response_bytes = response.as_bytes();
+                        let response_len = response_bytes.len() as u32;
 
-                    {
-                        let mut conns = connections.write().await;
-                        if let Some(stats) = conns.get_mut(&connection_id) {
-                            stats.bytes_sent += response_line.len() as u64;
+                        if let Err(e) = stream_write.write_all(&response_len.to_le_bytes()).await {
+                            error!("Failed to write response length: {}", e);
+                            break;
                         }
+                        if let Err(e) = stream_write.write_all(response_bytes).await {
+                            error!("Failed to write response: {}", e);
+                            break;
+                        }
+
+                        // Update stats
+                        {
+                            let mut total = total_requests.write().await;
+                            *total += 1;
+                        }
+
+                        {
+                            let mut conns = connections.write().await;
+                            if let Some(stats) = conns.get_mut(&connection_id) {
+                                stats.bytes_sent += (4 + response_bytes.len()) as u64;
+                            }
+                        }
+                    } else {
+                        // Doesn't look like valid length prefix
+                        error!("Connection {} invalid protocol - expected length prefix", connection_id);
+                        break;
                     }
                 },
                 Ok(Err(e)) => {
-                    error!("Connection {} read error: {}", connection_id, e);
+                    // Connection closed or error
+                    if e.kind() != std::io::ErrorKind::UnexpectedEof {
+                        error!("Connection {} read error: {}", connection_id, e);
+                    } else {
+                        debug!("Connection {} closed by client", connection_id);
+                    }
                     break;
                 },
                 Err(_) => {
