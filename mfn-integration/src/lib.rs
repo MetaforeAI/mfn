@@ -18,6 +18,9 @@ pub use mfn_core::*;
 mod socket_clients;
 pub mod socket_integration;
 
+// Embedding service module
+pub mod embeddings;
+
 /// Unified MFN system that orchestrates all layers
 pub struct MfnSystem {
     /// Layer 1: Zig IFR (via FFI)

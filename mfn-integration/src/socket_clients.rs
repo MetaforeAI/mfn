@@ -2,15 +2,18 @@
 // Provides unified interface for connecting to all 4 layers via Unix sockets
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::timeout;
-use tracing::{debug, warn, error};
+use tracing::{debug, warn};
 use uuid::Uuid;
+
+// Import embedding service
+use crate::embeddings::EmbeddingService;
 
 // Socket paths for all layers
 pub const LAYER1_SOCKET_PATH: &str = "/tmp/mfn_layer1.sock";
@@ -189,13 +192,15 @@ impl Layer1Client {
 pub struct Layer2Client {
     socket_path: String,
     connection_timeout: Duration,
+    embedding_service: Arc<EmbeddingService>,
 }
 
 impl Layer2Client {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(embedding_service: Arc<EmbeddingService>) -> Result<Self> {
         Ok(Self {
             socket_path: LAYER2_SOCKET_PATH.to_string(),
             connection_timeout: Duration::from_millis(5000),
+            embedding_service,
         })
     }
 
@@ -213,8 +218,19 @@ impl Layer2Client {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
-        // Generate query embedding (simplified - real implementation would use actual encoding)
-        let query_embedding = vec![0.1f32; 128]; // Placeholder embedding
+        // Generate semantic embedding using sentence transformer
+        let query_embedding = self.embedding_service
+            .embed(&query.content)
+            .await
+            .map_err(|e| anyhow!("Embedding generation failed: {}", e))?;
+
+        // Validate embedding dimension
+        if query_embedding.len() != 384 {
+            return Err(anyhow!(
+                "Invalid embedding dimension: expected 384, got {}",
+                query_embedding.len()
+            ));
+        }
 
         // Send JSON similarity search request
         let json_request = serde_json::json!({
@@ -444,15 +460,25 @@ pub struct LayerConnectionPool {
     layer2: Option<Layer2Client>,
     layer3: Option<Layer3Client>,
     layer4: Option<Layer4Client>,
+    // Shared embedding service
+    embedding_service: Arc<EmbeddingService>,
 }
 
 impl LayerConnectionPool {
     pub async fn new() -> Result<Self> {
+        // Initialize embedding service ONCE
+        use crate::embeddings::EmbeddingConfig;
+
+        let embedding_service = Arc::new(
+            EmbeddingService::new(EmbeddingConfig::default()).await?
+        );
+
         Ok(Self {
             layer1: None,
             layer2: None,
             layer3: None,
             layer4: None,
+            embedding_service,
         })
     }
 
@@ -465,7 +491,7 @@ impl LayerConnectionPool {
 
     pub async fn get_layer2(&mut self) -> Result<&Layer2Client> {
         if self.layer2.is_none() {
-            self.layer2 = Some(Layer2Client::new().await?);
+            self.layer2 = Some(Layer2Client::new(Arc::clone(&self.embedding_service)).await?);
         }
         Ok(self.layer2.as_ref().unwrap())
     }

@@ -2,19 +2,16 @@
 // Replaces broken FFI and HTTP implementations with Unix socket communication
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, Duration};
 use tokio::sync::Mutex;
 use anyhow::{Result, anyhow};
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug, warn};
 use serde_json;
 use uuid;
 
 use crate::socket_clients::{
-    Layer1Client as SocketLayer1,
-    Layer2Client as SocketLayer2,
-    Layer3Client as SocketLayer3,
-    Layer4Client as SocketLayer4,
     LayerConnectionPool,
     UniversalSearchQuery as SocketQuery,
     SearchType as SocketSearchType,
@@ -22,7 +19,7 @@ use crate::socket_clients::{
 };
 
 use mfn_core::{
-    UniversalSearchQuery, UniversalSearchResult, UniversalMemory, MemoryId,
+    UniversalSearchQuery, UniversalSearchResult, UniversalMemory, MemoryId, LayerId,
 };
 
 // Define missing types locally
@@ -91,6 +88,11 @@ impl SocketMfnIntegration {
             routing_strategy: RoutingStrategy::Sequential,
             performance_stats: Arc::new(Mutex::new(PerformanceStats::default())),
         })
+    }
+
+    /// Set the routing strategy
+    pub fn set_routing_strategy(&mut self, strategy: RoutingStrategy) {
+        self.routing_strategy = strategy;
     }
 
     /// Initialize and verify all layer connections
@@ -269,9 +271,62 @@ impl SocketMfnIntegration {
     }
 
     async fn query_parallel(&self, query: UniversalSearchQuery) -> Result<Vec<UniversalSearchResult>> {
-        // For now, just use sequential query
-        // TODO: Implement proper parallel execution with futures
-        self.query_sequential(query).await
+        let start = Instant::now();
+
+        // Clone query for each layer
+        let query1 = query.clone();
+        let query2 = query.clone();
+        let query3 = query.clone();
+        let query4 = query.clone();
+
+        // Get connection pool reference
+        let pool = Arc::clone(&self.connection_pool);
+
+        // Query all layers in parallel
+        let (result1, result2, result3, result4) = tokio::join!(
+            Self::query_layer1_safe(pool.clone(), query1),
+            Self::query_layer2_safe(pool.clone(), query2),
+            Self::query_layer3_safe(pool.clone(), query3),
+            Self::query_layer4_safe(pool.clone(), query4),
+        );
+
+        // Check if all layers failed first (before moving results)
+        let success_count = [&result1, &result2, &result3, &result4]
+            .iter()
+            .filter(|r| r.is_ok())
+            .count();
+
+        // Collect all successful results
+        let mut all_results = Vec::new();
+
+        if let Ok(results) = result1 {
+            all_results.extend(results);
+        }
+        if let Ok(results) = result2 {
+            all_results.extend(results);
+        }
+        if let Ok(results) = result3 {
+            all_results.extend(results);
+        }
+        if let Ok(results) = result4 {
+            all_results.extend(results);
+        }
+
+        if success_count == 0 {
+            return Err(anyhow!("All layers failed to respond"));
+        }
+
+        if success_count < 4 {
+            warn!("Partial failure: only {}/4 layers responded", success_count);
+        }
+
+        // Merge and rank results
+        let merged = merge_and_rank_results(all_results, query.max_results);
+
+        let elapsed = start.elapsed().as_millis() as f64;
+        debug!("Parallel query completed in {}ms", elapsed);
+
+        Ok(merged)
     }
 
     async fn query_adaptive(&self, query: UniversalSearchQuery) -> Result<Vec<UniversalSearchResult>> {
@@ -370,6 +425,191 @@ impl SocketMfnIntegration {
         info!("MFN socket integration shut down successfully");
         Ok(())
     }
+
+    // Safe layer query wrappers for parallel routing
+
+    /// Query Layer 1 with timeout and error handling
+    async fn query_layer1_safe(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let timeout_dur = Duration::from_micros(query.timeout_us);
+
+        match tokio::time::timeout(timeout_dur, Self::query_layer1_impl(pool, query)).await {
+            Ok(Ok(results)) => Ok(results),
+            Ok(Err(e)) => {
+                warn!("Layer 1 query failed: {}", e);
+                Ok(vec![])  // Return empty, don't fail entire query
+            }
+            Err(_) => {
+                warn!("Layer 1 query timeout after {}ms", timeout_dur.as_millis());
+                Ok(vec![])
+            }
+        }
+    }
+
+    async fn query_layer1_impl(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let socket_query = convert_to_socket_query(&query);
+
+        // Hold the lock while querying
+        let mut pool = pool.lock().await;
+        let layer1 = pool.get_layer1().await?;
+        let result = layer1.query(&socket_query).await?;
+        drop(pool); // Explicitly drop the lock
+
+        Ok(convert_from_socket_results(result))
+    }
+
+    /// Query Layer 2 with timeout and error handling
+    async fn query_layer2_safe(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let timeout_dur = Duration::from_micros(query.timeout_us);
+
+        match tokio::time::timeout(timeout_dur, Self::query_layer2_impl(pool, query)).await {
+            Ok(Ok(results)) => Ok(results),
+            Ok(Err(e)) => {
+                warn!("Layer 2 query failed: {}", e);
+                Ok(vec![])
+            }
+            Err(_) => {
+                warn!("Layer 2 query timeout after {}ms", timeout_dur.as_millis());
+                Ok(vec![])
+            }
+        }
+    }
+
+    async fn query_layer2_impl(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let socket_query = convert_to_socket_query(&query);
+
+        // Hold the lock while querying
+        let mut pool = pool.lock().await;
+        let layer2 = pool.get_layer2().await?;
+        let result = layer2.query(&socket_query).await?;
+        drop(pool);
+
+        Ok(convert_from_socket_results(result))
+    }
+
+    /// Query Layer 3 with timeout and error handling
+    async fn query_layer3_safe(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let timeout_dur = Duration::from_micros(query.timeout_us);
+
+        match tokio::time::timeout(timeout_dur, Self::query_layer3_impl(pool, query)).await {
+            Ok(Ok(results)) => Ok(results),
+            Ok(Err(e)) => {
+                warn!("Layer 3 query failed: {}", e);
+                Ok(vec![])
+            }
+            Err(_) => {
+                warn!("Layer 3 query timeout after {}ms", timeout_dur.as_millis());
+                Ok(vec![])
+            }
+        }
+    }
+
+    async fn query_layer3_impl(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let socket_query = convert_to_socket_query(&query);
+
+        // Hold the lock while querying
+        let mut pool = pool.lock().await;
+        let layer3 = pool.get_layer3().await?;
+        let result = layer3.query(&socket_query).await?;
+        drop(pool);
+
+        Ok(convert_from_socket_results(result))
+    }
+
+    /// Query Layer 4 with timeout and error handling
+    async fn query_layer4_safe(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let timeout_dur = Duration::from_micros(query.timeout_us);
+
+        match tokio::time::timeout(timeout_dur, Self::query_layer4_impl(pool, query)).await {
+            Ok(Ok(results)) => Ok(results),
+            Ok(Err(e)) => {
+                warn!("Layer 4 query failed: {}", e);
+                Ok(vec![])
+            }
+            Err(_) => {
+                warn!("Layer 4 query timeout after {}ms", timeout_dur.as_millis());
+                Ok(vec![])
+            }
+        }
+    }
+
+    async fn query_layer4_impl(
+        pool: Arc<Mutex<LayerConnectionPool>>,
+        query: UniversalSearchQuery,
+    ) -> Result<Vec<UniversalSearchResult>> {
+        let socket_query = convert_to_socket_query(&query);
+
+        // Hold the lock while querying
+        let mut pool = pool.lock().await;
+        let layer4 = pool.get_layer4().await?;
+        let result = layer4.query(&socket_query).await?;
+        drop(pool);
+
+        Ok(convert_from_socket_results(result))
+    }
+}
+
+// Merge results from multiple layers into unified ranked list
+fn merge_and_rank_results(
+    all_results: Vec<UniversalSearchResult>,
+    max_results: usize,
+) -> Vec<UniversalSearchResult> {
+    if all_results.is_empty() {
+        return vec![];
+    }
+
+    // Step 1: Deduplicate by memory_id (keep highest confidence)
+    let mut deduped: HashMap<MemoryId, UniversalSearchResult> = HashMap::new();
+
+    for result in all_results {
+        let memory_id = result.memory.id;
+
+        match deduped.entry(memory_id) {
+            Entry::Vacant(e) => {
+                e.insert(result);
+            }
+            Entry::Occupied(mut e) => {
+                // Keep result with higher confidence
+                if result.confidence > e.get().confidence {
+                    e.insert(result);
+                }
+                // Note: Can't easily merge metadata as UniversalSearchResult doesn't have metadata field
+            }
+        }
+    }
+
+    // Step 2: Convert to vector and sort by confidence
+    let mut results: Vec<UniversalSearchResult> = deduped.into_values().collect();
+    results.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Step 3: Limit to max_results
+    results.truncate(max_results);
+
+    results
 }
 
 // Helper functions for conversion
