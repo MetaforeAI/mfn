@@ -56,14 +56,16 @@ You were absolutely correct to question the optimistic performance claims. The c
 
 ## Performance Targets vs Reality
 
-| Component | Current | Target | Optimized |
+| Component | Current | Target | Future Target |
 |-----------|---------|---------|-----------|
-| **Layer 1** | 0.013ms | <0.1ms | ✅ 0.005ms (shared mem) |
-| **Layer 2** | 2.0ms | <5ms | ✅ 0.8ms (zero-copy) |
-| **Layer 3** | 200ms | <20ms | ✅ 1.2ms (Unix socket) |
-| **Layer 4** | 5.2ms | <50ms | ✅ 2.1ms (shared mem) |
-| **Total Latency** | ~207ms | <50ms | ✅ 4.1ms |
-| **Throughput** | ~100 QPS | 1000 QPS | ✅ 5000+ QPS |
+| **Layer 1** | 0.013ms | <0.1ms | 0.005ms (shared mem) |
+| **Layer 2** | 2.0ms | <5ms | 0.8ms (zero-copy) |
+| **Layer 3** | 200ms | <20ms | 1.2ms (Unix socket) |
+| **Layer 4** | 5.2ms | <50ms | 2.1ms (shared mem) |
+| **Total Latency** | ~207ms | <50ms | 4.1ms |
+| **Throughput** | ~100 QPS | 1000 QPS | 5000+ QPS |
+
+*Note: "Future Target" column shows optimization goals, not current performance.*
 
 ## Implementation Phases
 

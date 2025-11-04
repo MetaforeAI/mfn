@@ -1,6 +1,11 @@
 # MFN System - Quick Start Guide
 
-**5-Minute Deployment to Production**
+**5-Minute Alpha Deployment (Testing/Staging Only)**
+
+> ⚠️ **ALPHA SOFTWARE NOTICE**
+> This system is in alpha testing phase (~95% complete). NOT recommended for production use yet.
+> Missing: Production monitoring, health check endpoints, circuit breakers.
+> See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for details.
 
 ## Prerequisites Check
 ```bash
@@ -250,7 +255,7 @@ deploy:
 
 ---
 
-## Production Deployment
+## Staging/Testing Deployment
 
 ### Staging First (Recommended)
 ```bash

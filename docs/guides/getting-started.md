@@ -63,7 +63,7 @@ telepathy/
 | **Layer 2 (DSR)** | Encoding | <200ns | 158.86ns | ✅ Beat by 20% |
 | **Layer 2 (DSR)** | Reservoir Update | <150ns | 108.58ns | ✅ Beat by 28% |
 | **Layer 2 (DSR)** | Similarity Search | <2ms | <2ms | ✅ On target |
-| **Layer 3 (ALM)** | Graph Search | <20ms | 0.77ms | ✅ Beat by 96% |
+| **Layer 3 (ALM)** | Graph Search (socket) | <20ms | 0.13ms | ✅ Beat by 99% |
 | **Orchestrator** | Routing Overhead | <1ms | <200μs | ✅ Beat by 80% |
 
 **Test Coverage:** 46/48 tests passing (95.8%)

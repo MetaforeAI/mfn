@@ -1,7 +1,7 @@
 # MFN API Reference
 
 **Version:** 0.1.0
-**Status:** Production Ready
+**Status:** Alpha Testing (~95% Complete)
 
 Complete API reference for the Memory Flow Network (MFN) system.
 
@@ -590,7 +590,7 @@ pub async fn traverse_associations(
 pub async fn get_graph_stats(&self) -> Result<GraphStatistics, AlmError>
 ```
 
-**Performance:** ~0.77ms per graph search
+**Performance:** ~0.13ms per graph search (socket)
 
 ---
 
