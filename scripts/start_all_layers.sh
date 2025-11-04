@@ -77,17 +77,25 @@ cd - > /dev/null
 
 # Start Layer 4 (Rust CPE)
 echo -e "${GREEN}Starting Layer 4 (Rust CPE)...${NC}"
-cd layer4-rust-cpe || cd src/layers/layer4-cpe || { echo -e "${RED}Layer 4 directory not found${NC}"; exit 1; }
-if cargo build --release --bin layer4_socket_server 2>/dev/null; then
+# Layer 4 is built at workspace level, so check workspace target directory
+if [ -f "target/release/layer4_socket_server" ]; then
     ./target/release/layer4_socket_server > /tmp/layer4.log 2>&1 &
-    echo -e "${GREEN}✓ Layer 4 started (PID: $!)${NC}"
-elif cargo build --bin layer4_socket_server 2>/dev/null; then
+    echo -e "${GREEN}✓ Layer 4 started from workspace (PID: $!)${NC}"
+elif [ -f "target/debug/layer4_socket_server" ]; then
     ./target/debug/layer4_socket_server > /tmp/layer4.log 2>&1 &
-    echo -e "${GREEN}✓ Layer 4 started in debug mode (PID: $!)${NC}"
+    echo -e "${GREEN}✓ Layer 4 started from workspace debug (PID: $!)${NC}"
 else
-    echo -e "${YELLOW}⚠ Failed to build Layer 4${NC}"
+    echo -e "${YELLOW}⚠ Layer 4 binary not found. Building...${NC}"
+    if cargo build --release --bin layer4_socket_server 2>/dev/null; then
+        ./target/release/layer4_socket_server > /tmp/layer4.log 2>&1 &
+        echo -e "${GREEN}✓ Layer 4 started (PID: $!)${NC}"
+    elif cargo build --bin layer4_socket_server 2>/dev/null; then
+        ./target/debug/layer4_socket_server > /tmp/layer4.log 2>&1 &
+        echo -e "${GREEN}✓ Layer 4 started in debug mode (PID: $!)${NC}"
+    else
+        echo -e "${YELLOW}⚠ Failed to build Layer 4${NC}"
+    fi
 fi
-cd - > /dev/null
 
 # Wait for sockets to be created
 echo -e "${YELLOW}Waiting for socket files...${NC}"

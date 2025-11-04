@@ -386,6 +386,7 @@ impl Layer4Client {
     }
 
     pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        use tokio::io::AsyncReadExt;
         let start = Instant::now();
 
         // Connect to Layer 4 socket
@@ -396,26 +397,35 @@ impl Layer4Client {
             .map_err(|_| anyhow!("Layer 4 connection timeout"))?
             .map_err(|e| anyhow!("Layer 4 connection failed: {}", e))?;
 
-        let (reader, mut writer) = stream.into_split();
-        let mut reader = BufReader::new(reader);
+        let (mut reader, mut writer) = stream.into_split();
 
-        // Send JSON context prediction request
+        // Send JSON context prediction request using BINARY PROTOCOL (4-byte length + JSON)
         let json_request = serde_json::json!({
-            "type": "predict_context",
+            "type": "PredictContext",
             "request_id": &query.query_id,
-            "query": &query.content,
-            "max_predictions": query.max_results,
-            "min_confidence": query.min_confidence,
+            "payload": {
+                "current_context": query.content.split_whitespace().collect::<Vec<&str>>(),
+                "sequence_length": query.max_results,
+            }
         });
 
-        let request_str = format!("{}\n", json_request);
-        writer.write_all(request_str.as_bytes()).await?;
+        let request_json = serde_json::to_string(&json_request)?;
+        let request_bytes = request_json.as_bytes();
+        let request_len = request_bytes.len() as u32;
 
-        // Read response
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line).await?;
+        // Write: 4-byte length (little-endian) + JSON payload
+        writer.write_all(&request_len.to_le_bytes()).await?;
+        writer.write_all(request_bytes).await?;
 
-        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+        // Read response: 4-byte length + JSON
+        let mut len_buf = [0u8; 4];
+        reader.read_exact(&mut len_buf).await?;
+        let response_len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut response_buf = vec![0u8; response_len];
+        reader.read_exact(&mut response_buf).await?;
+
+        let response: serde_json::Value = serde_json::from_slice(&response_buf)?;
 
         let processing_time = start.elapsed().as_millis() as f64;
 
@@ -423,26 +433,33 @@ impl Layer4Client {
         if response["success"].as_bool().unwrap_or(false) {
             let mut results = Vec::new();
 
-            if let Some(predictions) = response["predictions"].as_array() {
-                for pred in predictions {
-                    results.push(UniversalSearchResult {
-                        memory_id: pred["memory_id"].as_u64().unwrap_or(0),
-                        content: pred["predicted_content"].as_str().unwrap_or("").to_string(),
-                        confidence: pred["confidence"].as_f64().unwrap_or(0.0) as f32,
-                        layer_source: 4,
-                        metadata: HashMap::new(),
-                    });
+            // Extract predictions from nested data structure
+            if let Some(data) = response["data"].as_object() {
+                if let Some(predictions) = data.get("predictions").and_then(|p| p.as_array()) {
+                    for pred in predictions {
+                        // Handle UniversalSearchResult structure from server
+                        if let Some(memory) = pred.get("memory").and_then(|m| m.as_object()) {
+                            results.push(UniversalSearchResult {
+                                memory_id: memory.get("id").and_then(|id| id.as_u64()).unwrap_or(0),
+                                content: memory.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                                confidence: pred.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0) as f32,
+                                layer_source: 4,
+                                metadata: HashMap::new(),
+                            });
+                        }
+                    }
                 }
             }
 
             Ok(LayerQueryResult {
                 results,
                 processing_time_ms: processing_time,
-                confidence: response["overall_confidence"].as_f64().unwrap_or(0.0),
+                confidence: 0.8, // Layer 4 provides contextual predictions
                 metadata: HashMap::new(),
             })
         } else {
-            Err(anyhow!("Layer 4 query failed"))
+            let error_msg = response["data"]["error"].as_str().unwrap_or("Unknown error");
+            Err(anyhow!("Layer 4 query failed: {}", error_msg))
         }
     }
 
