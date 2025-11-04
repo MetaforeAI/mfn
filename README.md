@@ -1,10 +1,9 @@
 # Telepathy - Memory Flow Network (MFN)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Development](https://img.shields.io/badge/status-production_ready-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-30%2F31%20passing-brightgreen.svg)]()
+[![Development](https://img.shields.io/badge/status-alpha-yellow.svg)]()
 
-A multi-layer memory architecture that treats memories as network packets flowing through specialized processing layers. Production-ready system with 96.8% test coverage.
+A multi-layer memory architecture that treats memories as network packets flowing through specialized processing layers.
 
 ## 🚀 Quick Start
 
@@ -44,30 +43,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## 📊 Implementation Status - 96.8% Complete
+## 📊 Implementation Status - Alpha Testing
 
-**System Health: 🟢 PRODUCTION READY**
+**System Health: 🟡 ALPHA TESTING**
 
-**Test Results:**
-- ✅ **MFN Core** - 18/18 tests passing (100%)
-- ✅ **Layer 1 (Zig IFR)** - Exact matching compiled and ready
-- ✅ **Layer 2 (Rust DSR)** - Real spiking neural network (528 lines of production LSM code)
+**Architecture:**
+- ✅ **MFN Core** - Orchestrator with 3 routing strategies (Sequential, Parallel, Adaptive)
+- ✅ **Layer 1 (Zig IFR)** - Exact matching implementation
+- ✅ **Layer 2 (Rust DSR)** - Spiking neural network (528 lines of LSM code)
 - ✅ **Layer 3 (Go ALM)** - Graph-based associative memory
-- ✅ **Layer 4 (Rust CPE)** - 12/13 tests passing (92.3%) - Temporal predictions working
-- ✅ **Overall** - 30/31 tests passing (96.8%)
+- ✅ **Layer 4 (Rust CPE)** - Temporal prediction with n-grams and Markov chains
 
 **What's Working:**
-- All 4 layers compile successfully
-- Orchestrator with 3 routing strategies (Sequential, Parallel, Adaptive)
-- Real similarity search using liquid state machines
-- Temporal pattern prediction with n-grams and Markov chains
-- Docker deployment ready
+- Multi-layer memory flow architecture
+- Socket-based inter-layer communication
+- Similarity search using liquid state machines
+- Temporal pattern prediction
+- Basic orchestrator functionality
 
-**Known Limitations:**
-- 1 edge-case test in Layer 4 (system behaves correctly, test is overly strict)
-- Integration test has import issues (non-critical)
-
-**Status:** Production deployment ready - Sprint 3 complete (2025-11-01)
+**Current Status:**
+This is an alpha-stage experimental system demonstrating multi-layer memory architecture. See **[MFN_INTEGRATION_COMPLETE.md](MFN_INTEGRATION_COMPLETE.md)** for detailed integration status.
 
 ## 🏗️ Architecture
 
@@ -107,8 +102,9 @@ Central coordinator that:
 ## 📚 Documentation
 
 - **[USER_GUIDE.md](USER_GUIDE.md)** - **START HERE** - Complete usage guide
-- **[FINAL_STATUS_SPRINT3.md](FINAL_STATUS_SPRINT3.md)** - Current system status
-- **[MFN_TECHNICAL_ANALYSIS_REPORT.md](MFN_TECHNICAL_ANALYSIS_REPORT.md)** - Technical deep-dive
+- **[API_REFERENCE.md](API_REFERENCE.md)** - Complete API documentation
+- **[MFN_INTEGRATION_COMPLETE.md](MFN_INTEGRATION_COMPLETE.md)** - Current integration status
+- **[MFN_TECHNICAL_ANALYSIS_REPORT.md](MFN_TECHNICAL_ANALYSIS_REPORT.md)** - Technical analysis
 - **[docs/architecture/](docs/architecture/)** - Architecture diagrams and design
 - **[docs/guides/](docs/guides/)** - Implementation guides
 
@@ -140,7 +136,7 @@ Central coordinator that:
 | Layer 3 (ALM) | Graph Search | ~0.77ms |
 | Orchestrator | Routing | <200μs |
 
-**Test Coverage**: 30/31 tests passing (96.8%)
+**Status**: Alpha testing
 
 ## 🛠️ Development
 
@@ -191,6 +187,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Memory Flow Network** - *Production-Ready Multi-Layer Memory Architecture*
+**Memory Flow Network** - *Experimental Multi-Layer Memory Architecture*
 
 *Built with ❤️ by NeoTec Digital*
