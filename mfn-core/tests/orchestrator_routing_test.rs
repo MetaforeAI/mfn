@@ -655,3 +655,218 @@ async fn test_orchestrator_add_memory_to_all_layers() {
     let results = orchestrator.search(query).await.unwrap();
     assert!(results.total_found > 0);
 }
+
+#[tokio::test]
+async fn test_adaptive_routing_exact_match() {
+    // Test that adaptive routing correctly identifies exact match queries
+    // and routes them to Layer 1 only
+    let mut orchestrator = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Adaptive,
+            ..Default::default()
+        });
+
+    let mut layer1 = MockLayer1::new();
+    layer1.add_memory(UniversalMemory::new(1, "exact".to_string())).await.unwrap();
+    orchestrator.register_layer(Box::new(layer1)).await.unwrap();
+
+    orchestrator.register_layer(Box::new(MockLayer2::new())).await.unwrap();
+
+    // Exact match query: short content, high min_weight
+    let query = UniversalSearchQuery {
+        content: Some("exact".to_string()),
+        min_weight: 0.95,
+        ..Default::default()
+    };
+
+    let results = orchestrator.search(query).await.unwrap();
+
+    // Should have found the exact match
+    assert_eq!(results.total_found, 1);
+    assert_eq!(results.results[0].memory.content, "exact");
+    assert_eq!(results.results[0].layer_origin, LayerId::Layer1);
+    // Should only have consulted Layer 1
+    assert!(results.layers_consulted.contains(&LayerId::Layer1));
+}
+
+#[tokio::test]
+async fn test_adaptive_routing_similarity() {
+    // Test that adaptive routing routes similarity queries to Layer 2
+    let mut orchestrator = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Adaptive,
+            ..Default::default()
+        });
+
+    orchestrator.register_layer(Box::new(MockLayer1::new())).await.unwrap();
+
+    let mut layer2 = MockLayer2::new();
+    layer2.add_memory(UniversalMemory::new(2, "hello world test data".to_string())).await.unwrap();
+    orchestrator.register_layer(Box::new(layer2)).await.unwrap();
+
+    // Similarity query: longer content, lower min_weight
+    let query = UniversalSearchQuery {
+        content: Some("hello world similarity".to_string()),
+        min_weight: 0.3,
+        ..Default::default()
+    };
+
+    let results = orchestrator.search(query).await.unwrap();
+
+    // Should have found similar match from Layer 2
+    assert!(results.total_found > 0);
+    assert!(results.layers_consulted.contains(&LayerId::Layer2));
+}
+
+#[tokio::test]
+async fn test_adaptive_routing_associations() {
+    // Test that adaptive routing routes association queries to Layer 3
+    let mut orchestrator = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Adaptive,
+            ..Default::default()
+        });
+
+    orchestrator.register_layer(Box::new(MockLayer1::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer2::new())).await.unwrap();
+
+    let mut layer3 = MockLayer3::new();
+    let memory = UniversalMemory::new(3, "associated content".to_string())
+        .with_tags(vec!["rust".to_string(), "programming".to_string()]);
+    layer3.add_memory(memory).await.unwrap();
+    orchestrator.register_layer(Box::new(layer3)).await.unwrap();
+
+    // Association query: has tags and association types
+    let query = UniversalSearchQuery {
+        tags: vec!["rust".to_string()],
+        association_types: vec![AssociationType::Semantic],
+        ..Default::default()
+    };
+
+    let results = orchestrator.search(query).await.unwrap();
+
+    // Should have found results from Layer 3
+    assert!(results.total_found > 0);
+    assert!(results.layers_consulted.contains(&LayerId::Layer3));
+}
+
+#[tokio::test]
+async fn test_adaptive_routing_temporal_prediction() {
+    // Test that adaptive routing routes temporal/prediction queries to Layer 4
+    let mut orchestrator = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Adaptive,
+            ..Default::default()
+        });
+
+    orchestrator.register_layer(Box::new(MockLayer1::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer2::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer3::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer4::new())).await.unwrap();
+
+    // Temporal/prediction query: has temporal context in layer_params
+    let mut layer_params = std::collections::HashMap::new();
+    layer_params.insert("temporal_context".to_string(), serde_json::json!(true));
+    layer_params.insert("predict_next".to_string(), serde_json::json!(5));
+
+    let query = UniversalSearchQuery {
+        layer_params,
+        ..Default::default()
+    };
+
+    let results = orchestrator.search(query).await.unwrap();
+
+    // Should have consulted Layer 4 for predictions
+    assert!(results.layers_consulted.contains(&LayerId::Layer4));
+}
+
+#[tokio::test]
+async fn test_adaptive_routing_ambiguous_query() {
+    // Test that adaptive routing uses multi-layer for ambiguous queries
+    let mut orchestrator = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Adaptive,
+            enable_parallel: true,
+            ..Default::default()
+        });
+
+    orchestrator.register_layer(Box::new(MockLayer1::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer2::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer3::new())).await.unwrap();
+    orchestrator.register_layer(Box::new(MockLayer4::new())).await.unwrap();
+
+    // Ambiguous query: no clear indicators
+    let query = UniversalSearchQuery {
+        max_results: 10,
+        ..Default::default()
+    };
+
+    let results = orchestrator.search(query).await.unwrap();
+
+    // Should have consulted multiple layers
+    assert!(results.layers_consulted.len() >= 2);
+}
+
+#[tokio::test]
+async fn test_adaptive_routing_performance() {
+    // Test that adaptive routing works correctly by comparing strategies
+    // for a query that would benefit from smart routing
+    let mut orchestrator_adaptive = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Adaptive,
+            ..Default::default()
+        });
+
+    let mut orchestrator_parallel = MfnOrchestrator::new()
+        .with_routing_config(RoutingConfig {
+            default_strategy: RoutingStrategy::Parallel,
+            enable_parallel: true,
+            ..Default::default()
+        });
+
+    // Register layers for both orchestrators
+    // Layer 1 has exact match
+    let mut layer1_a = MockLayer1::new();
+    layer1_a.add_memory(UniversalMemory::new(1, "exact".to_string())).await.unwrap();
+    orchestrator_adaptive.register_layer(Box::new(layer1_a)).await.unwrap();
+
+    let mut layer1_p = MockLayer1::new();
+    layer1_p.add_memory(UniversalMemory::new(1, "exact".to_string())).await.unwrap();
+    orchestrator_parallel.register_layer(Box::new(layer1_p)).await.unwrap();
+
+    // Add other layers
+    orchestrator_adaptive.register_layer(Box::new(MockLayer2::new())).await.unwrap();
+    orchestrator_adaptive.register_layer(Box::new(MockLayer3::new())).await.unwrap();
+    orchestrator_adaptive.register_layer(Box::new(MockLayer4::new())).await.unwrap();
+
+    orchestrator_parallel.register_layer(Box::new(MockLayer2::new())).await.unwrap();
+    orchestrator_parallel.register_layer(Box::new(MockLayer3::new())).await.unwrap();
+    orchestrator_parallel.register_layer(Box::new(MockLayer4::new())).await.unwrap();
+
+    // Exact match query
+    let query = UniversalSearchQuery {
+        content: Some("exact".to_string()),
+        min_weight: 0.95,
+        ..Default::default()
+    };
+
+    let results_adaptive = orchestrator_adaptive.search(query.clone()).await.unwrap();
+    let results_parallel = orchestrator_parallel.search(query).await.unwrap();
+
+    // Both should find the same result
+    assert_eq!(results_adaptive.total_found, 1);
+    assert_eq!(results_parallel.total_found, 1);
+
+    // Parallel queries all layers
+    assert_eq!(results_parallel.layers_consulted.len(), 4);
+
+    // Adaptive should consult fewer layers (only Layer 1 for exact match)
+    assert!(results_adaptive.layers_consulted.len() <= 2,
+        "Adaptive consulted {} layers, expected <= 2. Consulted: {:?}",
+        results_adaptive.layers_consulted.len(),
+        results_adaptive.layers_consulted);
+
+    // Both should find the exact match from Layer 1
+    assert_eq!(results_adaptive.results[0].layer_origin, LayerId::Layer1);
+    assert_eq!(results_parallel.results[0].layer_origin, LayerId::Layer1);
+}
