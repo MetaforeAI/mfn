@@ -383,21 +383,17 @@ impl SocketServer {
                             }
                         }
 
-                        // Parse as JSON
-                        let line = match std::str::from_utf8(&msg_buf) {
-                            Ok(s) => s,
+                        // Parse JSON directly from bytes into SocketRequest
+                        let request: SocketRequest = match serde_json::from_slice(&msg_buf) {
+                            Ok(req) => req,
                             Err(e) => {
-                                error!("Connection {} invalid UTF-8 in binary message: {}", connection_id, e);
+                                error!("Connection {} invalid JSON in binary message: {}", connection_id, e);
                                 break;
                             }
                         };
 
                         // Process request
-                        let response = Self::process_request_line(
-                            line.trim(),
-                            &dsr,
-                            &config,
-                        ).await;
+                        let response = Self::process_request(&request, &dsr, &config).await;
 
                         // Send binary response: length (4 bytes) + JSON
                         let response_bytes = response.as_bytes();
@@ -451,88 +447,64 @@ impl SocketServer {
         Ok(())
     }
 
-    /// Process a request line (JSON format)
-    async fn process_request_line(
-        line: &str,
+    /// Process a request and route to appropriate handler
+    async fn process_request(
+        request: &SocketRequest,
         dsr: &Arc<DynamicSimilarityReservoir>,
-        _config: &SocketServerConfig,
+        config: &SocketServerConfig,
     ) -> String {
         let start_time = Instant::now();
 
-        // Parse JSON request
-        let request: SocketRequest = match serde_json::from_str(line) {
-            Ok(req) => req,
-            Err(e) => {
-                let error_response = SocketResponse::Error {
-                    request_id: "unknown".to_string(),
-                    error: format!("Failed to parse request: {}", e),
-                    error_code: "PARSE_ERROR".to_string(),
-                };
-                return serde_json::to_string(&error_response).unwrap_or_default();
-            }
-        };
-
-        // Process request based on type
         let response = match request {
-            SocketRequest::AddMemory {
-                request_id,
-                memory_id,
-                embedding,
-                content,
-                tags,
-                metadata,
-            } => {
+            SocketRequest::AddMemory { request_id, memory_id, embedding, content, tags, metadata } => {
                 Self::handle_add_memory(
-                    request_id,
-                    memory_id,
-                    embedding,
-                    content,
-                    tags.unwrap_or_default(),
-                    metadata.unwrap_or_default(),
+                    request_id.clone(),
+                    *memory_id,
+                    embedding.clone(),
+                    content.clone(),
+                    tags.clone().unwrap_or_default(),
+                    metadata.clone().unwrap_or_default(),
                     dsr,
                     start_time,
                 ).await
             },
-
-            SocketRequest::SimilaritySearch {
-                request_id,
-                query_embedding,
-                top_k,
-                min_confidence: _,
-                timeout_ms: _,
-            } => {
+            SocketRequest::SimilaritySearch { request_id, query_embedding, top_k, min_confidence, timeout_ms } => {
                 Self::handle_similarity_search(
-                    request_id,
-                    query_embedding,
-                    top_k,
+                    request_id.clone(),
+                    query_embedding.clone(),
+                    *top_k,
                     dsr,
                     start_time,
                 ).await
             },
-
             SocketRequest::GetStats { request_id } => {
-                Self::handle_get_stats(request_id, dsr, start_time).await
+                Self::handle_get_stats(request_id.clone(), dsr, start_time).await
             },
-
             SocketRequest::OptimizeReservoir { request_id } => {
-                Self::handle_optimize_reservoir(request_id, dsr, start_time).await
+                Self::handle_optimize_reservoir(
+                    request_id.clone(),
+                    dsr,
+                    start_time,
+                ).await
             },
-
             SocketRequest::Ping { request_id } => {
-                Self::handle_ping(request_id, start_time).await
+                Self::handle_ping(request_id.clone(), start_time).await
             },
-
-            SocketRequest::GetMemory { request_id, memory_id: _ } => {
-                // Not implemented yet
+            SocketRequest::GetMemory { request_id, memory_id } => {
+                // Not yet implemented, return error
                 SocketResponse::Error {
-                    request_id,
-                    error: "GetMemory operation not yet implemented".to_string(),
+                    request_id: request_id.clone(),
+                    error: "GetMemory not yet implemented".to_string(),
                     error_code: "NOT_IMPLEMENTED".to_string(),
                 }
             },
         };
 
-        serde_json::to_string(&response).unwrap_or_default()
+        // Serialize response to JSON
+        serde_json::to_string(&response).unwrap_or_else(|e| {
+            error!("Failed to serialize response: {}", e);
+            format!(r#"{{"error":"Failed to serialize response: {}"}}"#, e)
+        })
     }
 
     /// Handle add memory request
