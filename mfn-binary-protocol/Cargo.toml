@@ -15,7 +15,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Performance and compression
-lz4_flex = "0.11"
+lz4_flex = { version = "0.11", optional = true }
 
 # FFI support
 libc = "0.2"
@@ -47,30 +47,6 @@ ffi = []
 name = "mfn_binary_protocol"
 crate-type = ["cdylib", "rlib"]
 
-[[example]]
-name = "performance_benchmark"
-required-features = ["benchmarks"]
-
-[[example]]
-name = "unix_socket_integration"
-required-features = ["async"]
-
-[[bench]]
-name = "serialization_bench"
-harness = false
-required-features = ["benchmarks"]
-
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-
-[profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-
-[profile.bench]
-lto = true
-codegen-units = 1
-debug = true

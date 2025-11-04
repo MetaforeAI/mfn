@@ -12,6 +12,7 @@ members = [
     "layer4-rust-cpe",
     "mfn-core",
     "mfn-integration",
+    "mfn-binary-protocol",
 ]
 
 [dependencies]

@@ -626,15 +626,28 @@ const fn generate_crc32_table() -> [u32; 256] {
     table
 }
 
-// LZ4 compression/decompression stubs (would use actual LZ4 implementation)
+// LZ4 compression/decompression using lz4_flex
+#[cfg(feature = "compression")]
 fn compress_lz4(data: &[u8]) -> Result<Vec<u8>> {
-    // Placeholder for LZ4 compression
-    // In production, use lz4_flex or similar crate
+    let compressed = lz4_flex::compress_prepend_size(data);
+    Ok(compressed)
+}
+
+#[cfg(not(feature = "compression"))]
+fn compress_lz4(data: &[u8]) -> Result<Vec<u8>> {
     Ok(data.to_vec())
 }
 
+#[cfg(feature = "compression")]
 fn decompress_lz4(data: &[u8]) -> Result<Vec<u8>> {
-    // Placeholder for LZ4 decompression  
+    lz4_flex::decompress_size_prepended(data)
+        .map_err(|e| MfnProtocolError::CompressionError(
+            format!("LZ4 decompression failed: {}", e)
+        ))
+}
+
+#[cfg(not(feature = "compression"))]
+fn decompress_lz4(data: &[u8]) -> Result<Vec<u8>> {
     Ok(data.to_vec())
 }
 

@@ -12,31 +12,16 @@
 //! - Direct Unix socket integration
 
 use std::collections::HashMap;
-use std::io::{self, Write, Read};
+use std::io;
 use std::mem;
-use std::ptr;
 use std::slice;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-pub mod constants;
-pub mod types;
-pub mod serialization;
-pub mod deserialization;
-pub mod compression;
-pub mod validation;
-pub mod performance;
-pub mod unix_socket;
-
-// Re-export core types
-pub use types::*;
-pub use serialization::*;
-pub use deserialization::*;
+use std::time::Duration;
 
 // ============================================================================
 // Core Error Types
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum MfnProtocolError {
     InvalidMagic(u32),
     UnsupportedVersion(u16),
@@ -47,20 +32,20 @@ pub enum MfnProtocolError {
     CompressionError(String),
     ChecksumMismatch { expected: u32, actual: u32 },
     BufferTooSmall { required: usize, available: usize },
-    InvalidUtf8(std::str::Utf8Error),
-    IoError(io::Error),
+    InvalidUtf8String(String),
+    IoError(String),
     Timeout(Duration),
 }
 
 impl From<io::Error> for MfnProtocolError {
     fn from(error: io::Error) -> Self {
-        MfnProtocolError::IoError(error)
+        MfnProtocolError::IoError(error.to_string())
     }
 }
 
 impl From<std::str::Utf8Error> for MfnProtocolError {
     fn from(error: std::str::Utf8Error) -> Self {
-        MfnProtocolError::InvalidUtf8(error)
+        MfnProtocolError::InvalidUtf8String(error.to_string())
     }
 }
 
@@ -431,20 +416,25 @@ impl<'a> MfnBinaryDeserializer<'a> {
         let byte_len = dims * mem::size_of::<f32>();
         let bytes = self.read_bytes(byte_len)?;
         
-        // SIMD-optimized bulk read for embeddings  
+        // Safe read of f32 values (handles alignment)
         let mut embedding = Vec::with_capacity(dims);
-        unsafe {
-            let float_ptr = bytes.as_ptr() as *const f32;
-            for i in 0..dims {
-                embedding.push(*float_ptr.add(i));
+        for i in 0..dims {
+            let offset = i * 4;
+            if offset + 4 > bytes.len() {
+                return Err(MfnProtocolError::BufferTooSmall {
+                    required: offset + 4,
+                    available: bytes.len(),
+                });
             }
+            let float_bytes = [bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]];
+            embedding.push(f32::from_le_bytes(float_bytes));
         }
         
         Ok(Some(embedding))
     }
 
     // Parse complete message with header validation
-    pub fn parse_message(&mut self) -> Result<ParsedMessage<'a>> {
+    pub fn parse_message(&mut self) -> Result<ParsedMessage> {
         // Read and validate header (16 bytes)
         let magic = self.read_u32()?;
         if magic != constants::MFN_MAGIC {
@@ -542,6 +532,8 @@ fn association_type_to_u8(assoc_type: &AssociationType) -> u8 {
         AssociationType::Functional => 0x07,
         AssociationType::Domain => 0x08,
         AssociationType::Cognitive => 0x09,
+        AssociationType::Similarity => 0x0A,
+        AssociationType::Reference => 0x0B,
         AssociationType::Custom(name) => {
             // Hash custom name to 0xF0-0xFF range
             0xF0 + (hash_string(name) % 16) as u8
@@ -626,15 +618,28 @@ const fn generate_crc32_table() -> [u32; 256] {
     table
 }
 
-// LZ4 compression/decompression stubs (would use actual LZ4 implementation)
+// LZ4 compression/decompression using lz4_flex
+#[cfg(feature = "compression")]
 fn compress_lz4(data: &[u8]) -> Result<Vec<u8>> {
-    // Placeholder for LZ4 compression
-    // In production, use lz4_flex or similar crate
+    let compressed = lz4_flex::compress_prepend_size(data);
+    Ok(compressed)
+}
+
+#[cfg(not(feature = "compression"))]
+fn compress_lz4(data: &[u8]) -> Result<Vec<u8>> {
     Ok(data.to_vec())
 }
 
+#[cfg(feature = "compression")]
 fn decompress_lz4(data: &[u8]) -> Result<Vec<u8>> {
-    // Placeholder for LZ4 decompression  
+    lz4_flex::decompress_size_prepended(data)
+        .map_err(|e| MfnProtocolError::CompressionError(
+            format!("LZ4 decompression failed: {}", e)
+        ))
+}
+
+#[cfg(not(feature = "compression"))]
+fn decompress_lz4(data: &[u8]) -> Result<Vec<u8>> {
     Ok(data.to_vec())
 }
 
@@ -682,9 +687,104 @@ mod tests {
 
         println!("Binary deserialization: {:.2}μs per operation",
                 elapsed.as_nanos() as f64 / 1000.0 / 1000.0);
-        
+
         // Should be <50μs for typical memory objects
         assert!(elapsed.as_nanos() / 1000 < 50_000);
+    }
+
+    #[test]
+    #[cfg(feature = "compression")]
+    fn test_lz4_compression() {
+        // Test with compressible data
+        let test_data = b"Hello, World! This is a test of LZ4 compression. \
+                         The quick brown fox jumps over the lazy dog. \
+                         Repetition helps compression. Repetition helps compression.";
+
+        println!("Testing LZ4 compression...");
+        println!("Original size: {} bytes", test_data.len());
+
+        // Test compression
+        let compressed = compress_lz4(test_data).expect("Compression should succeed");
+        println!("Compressed size: {} bytes", compressed.len());
+        println!("Compression ratio: {:.2}%",
+                (compressed.len() as f64 / test_data.len() as f64) * 100.0);
+
+        // Verify compression actually reduced size
+        assert!(compressed.len() < test_data.len(),
+                "Compressed data should be smaller than original for compressible content");
+
+        // Test decompression
+        let decompressed = decompress_lz4(&compressed).expect("Decompression should succeed");
+        println!("Decompressed size: {} bytes", decompressed.len());
+
+        // Verify round-trip
+        assert_eq!(test_data.len(), decompressed.len(), "Decompressed size should match original");
+        assert_eq!(test_data, decompressed.as_slice(), "Decompressed data should match original");
+
+        println!("✓ LZ4 round-trip successful!");
+    }
+
+    #[test]
+    #[cfg(feature = "compression")]
+    fn test_lz4_compression_with_memory_object() {
+        // Test compression with actual memory serialization
+        let memory = UniversalMemory {
+            id: 12345,
+            content: "This is a longer content string that should compress well. \
+                     It contains repeated patterns and text that LZ4 can compress efficiently. \
+                     The Memory Flow Network uses LZ4 compression for large payloads. \
+                     The Memory Flow Network uses LZ4 compression for large payloads.".to_string(),
+            embedding: Some(vec![0.1; 512]), // Large embedding
+            tags: vec!["test".to_string(), "compression".to_string(), "lz4".to_string()],
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("source".to_string(), "compression_test".to_string());
+                map.insert("type".to_string(), "benchmark".to_string());
+                map
+            },
+            created_at: 1640995200000000,
+            last_accessed: 1640995200000000,
+            access_count: 1,
+        };
+
+        // Serialize
+        let mut serializer = MfnBinarySerializer::new(4096).with_compression(true, 100);
+        serializer.serialize_memory(&memory).unwrap();
+        let serialized = serializer.buffer().to_vec();
+
+        println!("Serialized memory object size: {} bytes", serialized.len());
+
+        // The serialized data should have compression applied if above threshold
+        // Verify we can deserialize it back
+        let mut deserializer = MfnBinaryDeserializer::new(&serialized);
+        let deserialized = deserializer.deserialize_memory().expect("Should deserialize");
+
+        assert_eq!(memory.id, deserialized.id);
+        assert_eq!(memory.content, deserialized.content);
+        assert_eq!(memory.tags, deserialized.tags);
+        assert_eq!(memory.embedding, deserialized.embedding);
+
+        println!("✓ Memory object compression round-trip successful!");
+    }
+
+    #[test]
+    #[cfg(feature = "compression")]
+    fn test_lz4_error_handling() {
+        // Test decompression of invalid data
+        let invalid_data = b"This is not compressed LZ4 data";
+        let result = decompress_lz4(invalid_data);
+
+        assert!(result.is_err(), "Decompression of invalid data should fail");
+
+        if let Err(e) = result {
+            println!("Expected error: {:?}", e);
+            match e {
+                MfnProtocolError::CompressionError(_) => {
+                    println!("✓ Correctly detected invalid compression data");
+                }
+                _ => panic!("Wrong error type returned"),
+            }
+        }
     }
 
     fn create_test_memory() -> UniversalMemory {
@@ -705,10 +805,7 @@ mod tests {
     }
 }
 
-// Re-export UniversalMemory and related types from mfn-core
-use mfn_core::{UniversalMemory, UniversalAssociation, UniversalSearchQuery, AssociationType};
-
-pub struct ParsedMessage<'a> {
+pub struct ParsedMessage {
     pub message_type: MessageType,
     pub operation: Operation,
     pub layer_id: LayerId,
@@ -716,6 +813,63 @@ pub struct ParsedMessage<'a> {
     pub sequence_id: u32,
     pub flags: u16,
     pub payload: Vec<u8>,
+}
+
+// Stub types for mfn-core integration (would be imported from mfn-core crate in production)
+#[derive(Debug, Clone)]
+pub struct UniversalMemory {
+    pub id: u64,
+    pub created_at: u64,
+    pub last_accessed: u64,
+    pub access_count: u64,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub metadata: HashMap<String, String>,
+    pub embedding: Option<Vec<f32>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UniversalAssociation {
+    pub from_memory_id: u64,
+    pub to_memory_id: u64,
+    pub created_at: u64,
+    pub last_used: u64,
+    pub usage_count: u64,
+    pub weight: f32,
+    pub association_type: AssociationType,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum AssociationType {
+    Semantic,
+    Temporal,
+    Causal,
+    Spatial,
+    Conceptual,
+    Hierarchical,
+    Functional,
+    Domain,
+    Cognitive,
+    Custom(String),
+    Similarity,
+    Reference,
+}
+
+#[derive(Debug, Clone)]
+pub struct UniversalSearchQuery {
+    pub timeout_us: u64,
+    pub max_results: usize,
+    pub max_depth: usize,
+    pub min_weight: f32,
+    pub query_text: String,
+    pub query_embedding: Option<Vec<f32>>,
+    pub filters: HashMap<String, String>,
+    pub start_memory_ids: Vec<u64>,
+    pub association_types: Vec<AssociationType>,
+    pub tags: Vec<String>,
+    pub content: Option<String>,
+    pub embedding: Option<Vec<f32>>,
 }
 
 // Placeholder implementations for the missing modules
