@@ -61,6 +61,12 @@ ahash = "0.8"
 # For cache directory
 dirs = "5.0"
 
+# LRU cache for embeddings
+lru = "0.12"
+
+# Ordered float for heap comparisons
+ordered-float = "4.2"
+
 [dev-dependencies]
 tokio-test = "0.4"
 

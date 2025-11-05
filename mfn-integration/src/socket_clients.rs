@@ -9,8 +9,11 @@ use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::timeout;
+use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use uuid::Uuid;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 
 // Import embedding service
 use crate::embeddings::EmbeddingService;
@@ -193,6 +196,7 @@ pub struct Layer2Client {
     socket_path: String,
     connection_timeout: Duration,
     embedding_service: Arc<EmbeddingService>,
+    embedding_cache: Arc<Mutex<LruCache<String, Vec<f32>>>>,
 }
 
 impl Layer2Client {
@@ -201,6 +205,9 @@ impl Layer2Client {
             socket_path: LAYER2_SOCKET_PATH.to_string(),
             connection_timeout: Duration::from_millis(5000),
             embedding_service,
+            embedding_cache: Arc::new(Mutex::new(
+                LruCache::new(NonZeroUsize::new(100_000).unwrap())
+            )),
         })
     }
 
@@ -218,11 +225,26 @@ impl Layer2Client {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
-        // Generate semantic embedding using sentence transformer
-        let query_embedding = self.embedding_service
-            .embed(&query.content)
-            .await
-            .map_err(|e| anyhow!("Embedding generation failed: {}", e))?;
+        // Check cache first, generate embedding if not cached
+        let query_embedding = {
+            let mut cache = self.embedding_cache.lock().await;
+            if let Some(cached) = cache.get(&query.content) {
+                debug!("Embedding cache HIT for query");
+                cached.clone()
+            } else {
+                drop(cache); // Release lock before slow operation
+                debug!("Embedding cache MISS, generating...");
+                let embedding = self.embedding_service
+                    .embed(&query.content)
+                    .await
+                    .map_err(|e| anyhow!("Embedding generation failed: {}", e))?;
+
+                // Store in cache
+                let mut cache = self.embedding_cache.lock().await;
+                cache.put(query.content.clone(), embedding.clone());
+                embedding
+            }
+        };
 
         // Validate embedding dimension
         if query_embedding.len() != 384 {

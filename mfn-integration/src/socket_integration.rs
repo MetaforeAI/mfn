@@ -85,7 +85,7 @@ impl SocketMfnIntegration {
         let pool = LayerConnectionPool::new().await?;
         Ok(Self {
             connection_pool: Arc::new(Mutex::new(pool)),
-            routing_strategy: RoutingStrategy::Sequential,
+            routing_strategy: RoutingStrategy::Parallel,
             performance_stats: Arc::new(Mutex::new(PerformanceStats::default())),
         })
     }
@@ -198,14 +198,24 @@ impl SocketMfnIntegration {
         stats.total_time_ms += start_time.elapsed().as_millis() as f64;
         stats.success_rate = 1.0; // Update based on actual success/failure tracking
 
-        // Sort by confidence and merge
-        all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        // Use partial sort for efficient top-K selection (O(n log k) vs O(n log n))
+        // For small result sets, just do full sort
+        let k = query.max_results.min(all_results.len());
 
-        if all_results.len() > query.max_results {
-            all_results.truncate(query.max_results);
+        if all_results.len() <= k || all_results.len() < 20 {
+            // Full sort for small result sets
+            all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+            all_results.truncate(k);
+            result.results = all_results;
+        } else {
+            // Partial sort using select_nth_unstable for large result sets
+            all_results.select_nth_unstable_by(k, |a, b| {
+                b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mut top_k = all_results.into_iter().take(k).collect::<Vec<_>>();
+            top_k.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+            result.results = top_k;
         }
-
-        result.results = all_results;
         result.total_time_ms = start_time.elapsed().as_millis() as f64;
 
         Ok(result)
