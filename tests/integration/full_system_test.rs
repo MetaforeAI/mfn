@@ -2,8 +2,16 @@
 // Tests real connectivity to all 4 layers via Unix sockets
 //
 // To run these tests:
-// 1. Start all layers: ./scripts/start_all_layers.sh
-// 2. Run tests: cargo test --test full_system_test
+// cargo test --release --test full_system_test
+//
+// The test harness automatically:
+// - Builds all layer binaries
+// - Starts all layer servers
+// - Waits for health checks
+// - Runs tests
+// - Stops all servers and cleans up
+
+mod test_harness;
 
 use std::time::{Duration, Instant};
 use tokio::net::UnixStream;
@@ -12,6 +20,7 @@ use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::collections::HashMap;
+use test_harness::TestEnvironment;
 
 // Socket paths for all layers
 const LAYER1_SOCKET: &str = "/tmp/mfn_layer1.sock";
@@ -248,21 +257,24 @@ async fn send_and_receive(
 async fn test_layer_connectivity() {
     println!("\n=== Testing Layer Connectivity ===");
 
-    let layer_status = check_layers_running().await;
-    let mut any_running = false;
+    // Setup test environment (starts all layers automatically)
+    let mut env = match TestEnvironment::setup().await {
+        Ok(env) => env,
+        Err(e) => {
+            println!("✗ Failed to setup test environment: {}", e);
+            println!("  Make sure all binaries are built:");
+            println!("    cargo build --release");
+            println!("    cd layer1-zig-ifr && zig build -Doptimize=ReleaseFast");
+            println!("    cd layer3-go-alm && go build -o mfn-layer3-server");
+            panic!("Test environment setup failed");
+        }
+    };
 
+    let layer_status = check_layers_running().await;
+
+    println!("\nLayer status:");
     for (layer, is_running) in &layer_status {
         println!("  {} socket: {}", layer, if *is_running { "✓ EXISTS" } else { "✗ NOT FOUND" });
-        if *is_running {
-            any_running = true;
-        }
-    }
-
-    if !any_running {
-        println!("\n⚠️  No layer sockets found!");
-        println!("   Please run: ./scripts/start_all_layers.sh");
-        println!("   Skipping integration tests...\n");
-        return;
     }
 
     // Try to connect to each available layer
@@ -284,22 +296,26 @@ async fn test_layer_connectivity() {
             Err(e) => println!("  {} - ✗ FAILED: {}", layer, e),
         }
     }
+
+    // Cleanup
+    env.teardown();
 }
 
 #[tokio::test]
 async fn test_single_memory_flow() {
     println!("\n=== Testing Single Memory Flow (Ping) ===");
 
-    // Check if layers are running
+    // Setup test environment (starts all layers automatically)
+    let mut env = match TestEnvironment::setup().await {
+        Ok(env) => env,
+        Err(e) => {
+            println!("✗ Failed to setup test environment: {}", e);
+            panic!("Test environment setup failed");
+        }
+    };
+
     let layer_status = check_layers_running().await;
     let running_count = layer_status.iter().filter(|(_, running)| *running).count();
-
-    if running_count == 0 {
-        println!("⚠️  No layers running. Skipping test.");
-        println!("   Run: ./scripts/start_all_layers.sh");
-        return;
-    }
-
     println!("Found {} layer(s) running", running_count);
 
     // Test ping on each layer with correct message formats
@@ -352,23 +368,27 @@ async fn test_single_memory_flow() {
             Err(e) => println!("✗ CONNECTION FAILED: {}", e),
         }
     }
+
+    // Cleanup
+    env.teardown();
 }
 
 #[tokio::test]
 async fn test_query_routing() {
     println!("\n=== Testing Query Routing (Ping All Layers) ===");
 
-    // Check if layers are running
+    // Setup test environment (starts all layers automatically)
+    let mut env = match TestEnvironment::setup().await {
+        Ok(env) => env,
+        Err(e) => {
+            println!("✗ Failed to setup test environment: {}", e);
+            panic!("Test environment setup failed");
+        }
+    };
+
     let layer_status = check_layers_running().await;
     let running_count = layer_status.iter().filter(|(_, running)| *running).count();
-
-    if running_count == 0 {
-        println!("⚠️  No layers running. Skipping test.");
-        println!("   Run: ./scripts/start_all_layers.sh");
-        return;
-    }
-
-    println!("Testing routing to all available layers:\n");
+    println!("Testing routing to all {} available layer(s):\n", running_count);
 
     // Test ping routing to each layer
     for (layer_num, socket_path, builder, use_newline) in [
@@ -418,21 +438,23 @@ async fn test_query_routing() {
             Err(e) => println!("✗ Connection failed: {}", e),
         }
     }
+
+    // Cleanup
+    env.teardown();
 }
 
 #[tokio::test]
 async fn test_performance_sanity_check() {
     println!("\n=== Performance Sanity Check ===");
 
-    // Check if layers are running
-    let layer_status = check_layers_running().await;
-    let running_count = layer_status.iter().filter(|(_, running)| *running).count();
-
-    if running_count == 0 {
-        println!("⚠️  No layers running. Skipping test.");
-        println!("   Run: ./scripts/start_all_layers.sh");
-        return;
-    }
+    // Setup test environment (starts all layers automatically)
+    let mut env = match TestEnvironment::setup().await {
+        Ok(env) => env,
+        Err(e) => {
+            println!("✗ Failed to setup test environment: {}", e);
+            panic!("Test environment setup failed");
+        }
+    };
 
     println!("Testing realistic performance expectations:");
     println!("Expected ranges (per ping):");
@@ -523,27 +545,30 @@ async fn test_performance_sanity_check() {
     println!("\n  Performance check complete.");
     println!("  Note: Realistic layer operations should be 200-500 µs,");
     println!("        not 5-10 ns (which indicates empty/stub operations)");
+
+    // Cleanup
+    env.teardown();
 }
 
 #[tokio::test]
 async fn test_concurrent_load() {
     println!("\n=== Testing Concurrent Load ===");
 
-    // Check if layers are running
-    let layer_status = check_layers_running().await;
-    let running_count = layer_status.iter().filter(|(_, running)| *running).count();
-
-    if running_count == 0 {
-        println!("⚠️  No layers running. Skipping test.");
-        println!("   Run: ./scripts/start_all_layers.sh");
-        return;
-    }
+    // Setup test environment (starts all layers automatically)
+    let mut env = match TestEnvironment::setup().await {
+        Ok(env) => env,
+        Err(e) => {
+            println!("✗ Failed to setup test environment: {}", e);
+            panic!("Test environment setup failed");
+        }
+    };
 
     const CONCURRENT_REQUESTS: usize = 10;
 
     // Test Layer 2 (Rust DSR) as example
     if !Path::new(LAYER2_SOCKET).exists() {
         println!("  Layer2 socket not found, skipping concurrent load test");
+        env.teardown();
         return;
     }
 
@@ -583,6 +608,9 @@ async fn test_concurrent_load() {
     } else {
         println!("    ⚠️  Some requests failed under concurrent load");
     }
+
+    // Cleanup
+    env.teardown();
 }
 
 // Dependencies for Cargo.toml test section

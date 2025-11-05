@@ -2,11 +2,36 @@
 
 Comprehensive integration tests that validate all 4 MFN layers work together via Unix socket communication.
 
-## Prerequisites
+## Automated Testing (RECOMMENDED)
 
-All 4 layer socket servers must be running. The test will gracefully skip if layers are not available.
+The test harness automatically manages server lifecycle - no manual setup required!
 
-## Starting Layers
+```bash
+# One command to rule them all - builds binaries, runs tests, cleans up
+./scripts/run_integration_tests.sh
+```
+
+Or run directly with cargo:
+```bash
+# Build binaries first
+cargo build --release
+cd layer1-zig-ifr && zig build -Doptimize=ReleaseFast && cd ..
+cd layer3-go-alm && go build -o mfn-layer3-server && cd ..
+
+# Run tests (harness handles server management)
+cargo test --release --test full_system_test
+```
+
+The test harness automatically:
+- ✅ Cleans up old socket files
+- ✅ Starts all layer servers
+- ✅ Waits for health checks
+- ✅ Runs tests
+- ✅ Stops servers and cleans up (even on test failure)
+
+## Manual Testing (LEGACY)
+
+If you need to manually manage servers:
 
 ```bash
 # Start all layers at once
@@ -14,19 +39,12 @@ All 4 layer socket servers must be running. The test will gracefully skip if lay
 
 # Verify sockets exist
 ls -la /tmp/mfn_layer*.sock
-```
 
-## Running Tests
-
-```bash
-# Run all integration tests
-cargo test --test full_system_test
-
-# Run with detailed output
+# Run tests
 cargo test --test full_system_test -- --nocapture
 
-# Run specific test
-cargo test --test full_system_test test_layer_connectivity
+# Stop layers
+./scripts/stop_all_layers.sh
 ```
 
 ## Test Coverage
@@ -110,23 +128,51 @@ The test specifically checks for realistic performance:
 
 ## Troubleshooting
 
-### Socket Files Not Found
+### Build Failures
 ```bash
-# Check if layers are running
-ps aux | grep -E "mfn_layer|layer[1-4]_"
+# Check all build dependencies are installed
+rustc --version  # Rust compiler
+zig version      # Zig compiler
+go version       # Go compiler
 
-# Check socket files
-ls -la /tmp/mfn_layer*.sock
-
-# Check layer logs
-tail -f /tmp/layer*.log
+# Build each layer individually
+cargo build --release --bin layer2_socket_server
+cargo build --release --bin layer4_socket_server
+cd layer1-zig-ifr && zig build -Doptimize=ReleaseFast && cd ..
+cd layer3-go-alm && go build -o mfn-layer3-server && cd ..
 ```
 
-### Connection Refused
+### Test Environment Setup Failed
 ```bash
-# Restart layers
-pkill -f "mfn_layer|layer[1-4]_"
-./scripts/start_all_layers.sh
+# Check if binaries exist
+ls -la target/release/layer*_socket_server
+ls -la layer1-zig-ifr/zig-out/bin/layer1_socket_main
+ls -la layer3-go-alm/mfn-layer3-server
+
+# Clean and rebuild
+cargo clean
+./scripts/run_integration_tests.sh
+```
+
+### Socket Permission Issues
+```bash
+# Check socket directory permissions
+ls -la /tmp/
+
+# Remove old sockets manually
+rm -f /tmp/mfn_layer*.sock
+```
+
+### Lingering Processes
+```bash
+# Kill all layer processes
+pkill -f "layer1_socket_main"
+pkill -f "layer2_socket_server"
+pkill -f "mfn-layer3-server"
+pkill -f "layer4_socket_server"
+
+# Verify no processes remain
+ps aux | grep -E "layer[1-4]_"
 ```
 
 ### Unrealistic Performance
@@ -137,19 +183,26 @@ If seeing 5-10 ns latencies:
 
 ## CI/CD Integration
 
-For continuous integration:
+For continuous integration - use the automated test script:
 
 ```yaml
 # Example GitHub Actions workflow
-- name: Start MFN Layers
-  run: ./scripts/start_all_layers.sh
+- name: Build and Run Integration Tests
+  run: ./scripts/run_integration_tests.sh
 
-- name: Wait for layers
-  run: sleep 2
+# Or for more control:
+- name: Build Binaries
+  run: |
+    cargo build --release
+    cd layer1-zig-ifr && zig build -Doptimize=ReleaseFast && cd ..
+    cd layer3-go-alm && go build -o mfn-layer3-server && cd ..
 
 - name: Run Integration Tests
-  run: cargo test --test full_system_test
+  run: cargo test --release --test full_system_test
 
-- name: Stop Layers
-  run: pkill -f "mfn_layer|layer[1-4]_" || true
+- name: Cleanup
+  if: always()
+  run: |
+    pkill -f "layer.*_socket" || true
+    rm -f /tmp/mfn_layer*.sock
 ```
