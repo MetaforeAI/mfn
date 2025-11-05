@@ -44,7 +44,7 @@ impl Default for SocketServerConfig {
         Self {
             socket_path: DEFAULT_SOCKET_PATH.to_string(),
             max_connections: 100,
-            connection_timeout_ms: 30000,
+            connection_timeout_ms: 5000,  // Reduced from 30000ms to 5000ms
             enable_binary_protocol: true,
             enable_json_protocol: true,
             buffer_size: 8192,
