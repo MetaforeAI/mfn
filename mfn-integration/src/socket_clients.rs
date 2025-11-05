@@ -193,7 +193,9 @@ impl Layer1Client {
     }
 
     pub async fn add_memory(&self, content: &str, memory_data: &[u8]) -> Result<u64> {
-        // Connect to Layer 1 socket
+        // CRITICAL: For concurrent operations, create a new connection each time
+        // Connection pooling doesn't work when multiple tasks access simultaneously
+        // The mutex serializes access but split/reunite causes race conditions
         let stream = timeout(
             self.connection_timeout,
             UnixStream::connect(&self.socket_path)
@@ -213,18 +215,35 @@ impl Layer1Client {
         });
 
         let request_str = format!("{}\n", json_request);
-        writer.write_all(request_str.as_bytes()).await?;
+        writer.write_all(request_str.as_bytes()).await
+            .map_err(|e| anyhow!("Layer 1 write failed: {}", e))?;
 
-        // Read response
+        // Flush to ensure data is sent
+        writer.flush().await
+            .map_err(|e| anyhow!("Layer 1 flush failed: {}", e))?;
+
+        // Read response with timeout
         let mut response_line = String::new();
-        reader.read_line(&mut response_line).await?;
+        let read_timeout = Duration::from_millis(5000);
+        let read_result = timeout(read_timeout, reader.read_line(&mut response_line)).await
+            .map_err(|_| anyhow!("Layer 1 read timeout after {}ms", read_timeout.as_millis()))?;
 
-        let response: serde_json::Value = serde_json::from_str(&response_line)?;
+        if let Err(e) = read_result {
+            return Err(anyhow!("Layer 1 read failed: {}", e));
+        }
+
+        if response_line.trim().is_empty() {
+            return Err(anyhow!("Layer 1 returned empty response"));
+        }
+
+        let response: serde_json::Value = serde_json::from_str(&response_line)
+            .map_err(|e| anyhow!("Layer 1 invalid JSON response: {}", e))?;
 
         if response["success"].as_bool().unwrap_or(false) {
             Ok(response["memory_id_hash"].as_u64().unwrap_or(0))
         } else {
-            Err(anyhow!("Failed to add memory to Layer 1"))
+            let error_msg = response["error"].as_str().unwrap_or("Unknown error");
+            Err(anyhow!("Failed to add memory to Layer 1: {}", error_msg))
         }
     }
 

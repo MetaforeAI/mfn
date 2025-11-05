@@ -23,7 +23,7 @@ import (
 
 const (
 	DefaultSocketPath = "/tmp/mfn_layer3.sock"
-	MaxConnections    = 100
+	MaxConnections    = 200 // Increased for high-concurrency stress tests
 	BufferSize        = 8192
 	RequestTimeout    = 30 * time.Second
 )

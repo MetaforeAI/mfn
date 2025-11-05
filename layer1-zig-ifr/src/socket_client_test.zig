@@ -36,8 +36,8 @@ fn sendJsonRequest(stream: net.Stream, json_request: []const u8) !void {
 }
 
 fn receiveJsonResponse(stream: net.Stream, allocator: std.mem.Allocator) ![]u8 {
-    var buffer = ArrayList(u8).init(allocator);
-    defer buffer.deinit();
+    var buffer = ArrayList(u8){};
+    defer buffer.deinit(allocator);
     
     var temp_buffer: [1024]u8 = undefined;
     
@@ -45,7 +45,7 @@ fn receiveJsonResponse(stream: net.Stream, allocator: std.mem.Allocator) ![]u8 {
         const bytes_read = try stream.read(temp_buffer[0..]);
         if (bytes_read == 0) break;
         
-        try buffer.appendSlice(temp_buffer[0..bytes_read]);
+        try buffer.appendSlice(allocator, temp_buffer[0..bytes_read]);
         
         // Check for complete JSON response (ends with newline)
         if (std.mem.indexOf(u8, buffer.items, "\n")) |_| {
@@ -230,19 +230,19 @@ fn testBinaryAddMemory(allocator: std.mem.Allocator, socket_path: []const u8) !v
     const content = "Binary test memory content";
     const memory_data = "Binary test memory data";
     
-    var payload_buffer = ArrayList(u8).init(allocator);
-    defer payload_buffer.deinit();
+    var payload_buffer = ArrayList(u8){};
+    defer payload_buffer.deinit(allocator);
     
     const content_len: u32 = @intCast(content.len);
     const memory_data_len: u32 = @intCast(memory_data.len);
     
     const content_len_bytes = std.mem.asBytes(&content_len);
-    try payload_buffer.appendSlice(content_len_bytes);
-    try payload_buffer.appendSlice(content);
+    try payload_buffer.appendSlice(allocator, content_len_bytes);
+    try payload_buffer.appendSlice(allocator, content);
     
     const memory_data_len_bytes = std.mem.asBytes(&memory_data_len);
-    try payload_buffer.appendSlice(memory_data_len_bytes);
-    try payload_buffer.appendSlice(memory_data);
+    try payload_buffer.appendSlice(allocator, memory_data_len_bytes);
+    try payload_buffer.appendSlice(allocator, memory_data);
     
     const request_id: u32 = 1002;
     
