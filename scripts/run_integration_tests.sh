@@ -16,13 +16,13 @@ echo ""
 # Step 1: Build all binaries
 echo -e "${GREEN}[1/3] Building binaries...${NC}"
 
-# Build Rust binaries (Layer 2 and Layer 4)
-echo -e "${YELLOW}  Building Rust binaries...${NC}"
-cargo build --release --bin layer2_socket_server --bin layer4_socket_server || {
-    echo -e "${RED}✗ Failed to build Rust binaries${NC}"
+# Build Rust binaries (workspace build includes all binaries)
+echo -e "${YELLOW}  Building Rust workspace...${NC}"
+cargo build --release || {
+    echo -e "${RED}✗ Failed to build Rust workspace${NC}"
     exit 1
 }
-echo -e "${GREEN}  ✓ Rust binaries built${NC}"
+echo -e "${GREEN}  ✓ Rust workspace built${NC}"
 
 # Build Zig binary (Layer 1)
 echo -e "${YELLOW}  Building Zig binary...${NC}"
