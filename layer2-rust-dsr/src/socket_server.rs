@@ -90,6 +90,11 @@ pub enum SocketRequest {
         request_id: String,
     },
 
+    /// Comprehensive health check
+    HealthCheck {
+        request_id: String,
+    },
+
     /// Get memory by ID (if supported by future versions)
     GetMemory {
         request_id: String,
@@ -122,6 +127,16 @@ pub enum SocketResponse {
         layer: String,
         version: String,
     },
+
+    /// Health check response
+    HealthCheckResponse {
+        request_id: String,
+        status: String,
+        layer: String,
+        timestamp: u64,
+        uptime_seconds: u64,
+        metrics: serde_json::Value,
+    },
 }
 
 /// Connection statistics
@@ -143,11 +158,12 @@ pub struct SocketServer {
     listener: Option<UnixListener>,
     running: Arc<RwLock<bool>>,
     connections: Arc<RwLock<HashMap<String, ConnectionStats>>>,
-    
+
     // Performance metrics
     total_requests: Arc<RwLock<u64>>,
     total_connections: Arc<RwLock<u64>>,
     active_connections: Arc<RwLock<u64>>,
+    start_time: Instant,
 }
 
 impl SocketServer {
@@ -165,6 +181,7 @@ impl SocketServer {
             total_requests: Arc::new(RwLock::new(0)),
             total_connections: Arc::new(RwLock::new(0)),
             active_connections: Arc::new(RwLock::new(0)),
+            start_time: Instant::now(),
         }
     }
 
@@ -286,12 +303,13 @@ impl SocketServer {
         let connections = Arc::clone(&self.connections);
         let total_requests = Arc::clone(&self.total_requests);
         let active_connections = Arc::clone(&self.active_connections);
+        let start_time = self.start_time;
 
         // Register connection
         {
             let mut conns = connections.write().await;
             let mut active = active_connections.write().await;
-            
+
             conns.insert(connection_id.clone(), ConnectionStats {
                 connection_id: connection_id.clone(),
                 connected_at: Instant::now(),
@@ -301,7 +319,7 @@ impl SocketServer {
                 last_activity: Instant::now(),
                 protocol_type: "auto-detect".to_string(),
             });
-            
+
             *active += 1;
         }
 
@@ -315,6 +333,7 @@ impl SocketServer {
                 config,
                 connections.clone(),
                 total_requests,
+                start_time,
             ).await {
                 error!("Connection handler error: {}", e);
             }
@@ -323,7 +342,7 @@ impl SocketServer {
             {
                 let mut conns = connections.write().await;
                 let mut active = active_connections.write().await;
-                
+
                 conns.remove(&conn_id_clone);
                 *active = active.saturating_sub(1);
             }
@@ -338,6 +357,7 @@ impl SocketServer {
         config: SocketServerConfig,
         connections: Arc<RwLock<HashMap<String, ConnectionStats>>>,
         total_requests: Arc<RwLock<u64>>,
+        server_start_time: Instant,
     ) -> Result<()> {
         use tokio::io::AsyncReadExt;
 
@@ -393,7 +413,7 @@ impl SocketServer {
                         };
 
                         // Process request
-                        let response = Self::process_request(&request, &dsr, &config).await;
+                        let response = Self::process_request(&request, &dsr, &config, server_start_time).await;
 
                         // Send binary response: length (4 bytes) + JSON
                         let response_bytes = response.as_bytes();
@@ -452,6 +472,7 @@ impl SocketServer {
         request: &SocketRequest,
         dsr: &Arc<DynamicSimilarityReservoir>,
         config: &SocketServerConfig,
+        server_start_time: Instant,
     ) -> String {
         let start_time = Instant::now();
 
@@ -489,6 +510,9 @@ impl SocketServer {
             },
             SocketRequest::Ping { request_id } => {
                 Self::handle_ping(request_id.clone(), start_time).await
+            },
+            SocketRequest::HealthCheck { request_id } => {
+                Self::handle_health_check(request_id.clone(), dsr, config, start_time).await
             },
             SocketRequest::GetMemory { request_id, memory_id } => {
                 // Not yet implemented, return error
@@ -646,6 +670,43 @@ impl SocketServer {
             timestamp,
             layer: "Layer 2: Dynamic Similarity Reservoir".to_string(),
             version: "0.1.0".to_string(),
+        }
+    }
+
+    /// Handle health check request
+    async fn handle_health_check(
+        request_id: String,
+        dsr: &Arc<DynamicSimilarityReservoir>,
+        config: &SocketServerConfig,
+        server_start_time: Instant,
+    ) -> SocketResponse {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let uptime_seconds = server_start_time.elapsed().as_secs();
+
+        // Get DSR statistics
+        let stats = dsr.get_performance_stats().await;
+
+        // Build metrics JSON
+        let metrics = serde_json::json!({
+            "total_memories": stats.total_memories,
+            "total_queries": stats.total_searches,
+            "success_rate": stats.search_success_rate,
+            "avg_latency_us": stats.avg_search_time_ms * 1000.0, // Convert ms to us
+            "reservoir_utilization": stats.reservoir_utilization,
+            "wells_active": stats.wells_used,
+        });
+
+        SocketResponse::HealthCheckResponse {
+            request_id,
+            status: "healthy".to_string(),
+            layer: "Layer2_DSR".to_string(),
+            timestamp,
+            uptime_seconds,
+            metrics,
         }
     }
 

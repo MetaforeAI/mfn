@@ -11,8 +11,8 @@ use anyhow::Result;
 
 pub use mfn_core::*;
 
-// Comment out layer4 for now as it has issues
-// use layer4_rust_cpe as layer4_cpe;
+// Layer 4: Context Prediction Engine
+use layer4_cpe;
 
 // Socket-based integration modules
 mod socket_clients;
@@ -20,6 +20,9 @@ pub mod socket_integration;
 
 // Embedding service module
 pub mod embeddings;
+
+// Health check module
+pub mod health;
 
 /// Unified MFN system that orchestrates all layers
 pub struct MfnSystem {
@@ -33,8 +36,7 @@ pub struct MfnSystem {
     pub layer3: Option<Layer3Client>,
     
     /// Layer 4: Rust CPE (direct)
-    // pub layer4: Option<Arc<RwLock<layer4_cpe::ContextPredictionLayer>>>,
-    pub layer4: Option<Arc<RwLock<()>>>, // Placeholder for now
+    pub layer4: Option<Arc<RwLock<layer4_cpe::ContextPredictionLayer>>>,
     
     /// System configuration
     config: MfnSystemConfig,
@@ -90,8 +92,6 @@ pub enum RoutingStrategy {
     Parallel,
     /// Adaptive routing based on query type and performance
     Adaptive,
-    /// Custom routing logic
-    Custom(String),
 }
 
 /// System-wide performance metrics
@@ -176,9 +176,9 @@ impl MfnSystem {
         
         if self.config.layer4_enabled {
             log::info!("Initializing Layer 4 (Context Engine)...");
-            // let layer4 = layer4_cpe::ContextPredictionLayer::new();
-            // self.layer4 = Some(Arc::new(RwLock::new(layer4)));
-            self.layer4 = Some(Arc::new(RwLock::new(()))); // Placeholder
+            let layer4_config = layer4_cpe::ContextPredictionConfig::default();
+            let layer4 = layer4_cpe::ContextPredictionLayer::new(layer4_config).await?;
+            self.layer4 = Some(Arc::new(RwLock::new(layer4)));
         }
         
         log::info!("All layers initialized successfully");
@@ -195,7 +195,6 @@ impl MfnSystem {
             RoutingStrategy::Sequential => self.query_sequential(query).await,
             RoutingStrategy::Parallel => self.query_parallel(query).await,
             RoutingStrategy::Adaptive => self.query_adaptive(query).await,
-            RoutingStrategy::Custom(_) => self.query_custom(query).await,
         }?;
         
         // Update metrics
@@ -294,20 +293,42 @@ impl MfnSystem {
         }
     }
     
-    /// Custom routing logic
-    async fn query_custom(&self, query: UniversalSearchQuery) -> Result<MfnQueryResult> {
-        // Placeholder for custom routing implementation
-        self.query_sequential(query).await
-    }
-    
-    /// Query Layer 4 specifically (placeholder)
-    async fn query_layer4(&self, _layer4: &(), _query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
-        // Placeholder implementation - Layer4 integration disabled for now
+    /// Query Layer 4 specifically - Context Prediction Engine
+    async fn query_layer4(&self, layer4: &layer4_cpe::ContextPredictionLayer, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
+        use mfn_core::layer_interface::{MfnLayer, RoutingDecision};
+
+        let start = std::time::Instant::now();
+
+        // Call Layer 4's search method
+        let routing_decision = layer4.search(query).await
+            .map_err(|e| anyhow::anyhow!("Layer 4 search failed: {}", e))?;
+
+        let processing_time_ms = start.elapsed().as_millis() as f64;
+
+        // Extract results from routing decision
+        let results = match routing_decision {
+            RoutingDecision::FoundExact { results } => results,
+            RoutingDecision::FoundPartial { results, .. } => results,
+            RoutingDecision::SearchComplete { results } => results,
+            RoutingDecision::RouteToLayers { .. } => vec![],
+        };
+
+        // Calculate confidence based on results
+        let confidence = if results.is_empty() {
+            0.0
+        } else {
+            results.iter().map(|r| r.confidence).sum::<f64>() / results.len() as f64
+        };
+
+        let mut metadata = HashMap::new();
+        metadata.insert("predictions_made".to_string(), results.len().to_string());
+        metadata.insert("confidence".to_string(), confidence.to_string());
+
         Ok(LayerQueryResult {
-            results: vec![],
-            processing_time_ms: 0.0,
-            confidence: 0.0,
-            metadata: HashMap::new(),
+            results,
+            processing_time_ms,
+            confidence,
+            metadata,
         })
     }
     

@@ -48,17 +48,27 @@ type UnixSocketServer struct {
 	totalRequests  uint64
 	totalResponses uint64
 	totalErrors    uint64
+	startTime      time.Time
 }
 
 // SocketRequest represents an incoming request via Unix socket
 type SocketRequest struct {
-	Type      string                 `json:"type"`
-	RequestID string                 `json:"request_id"`
-	Query     string                 `json:"query,omitempty"`
-	Content   string                 `json:"content,omitempty"`
-	Limit     int                    `json:"limit,omitempty"`
-	MinConfidence float32            `json:"min_confidence,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	Type          string                 `json:"type"`
+	RequestID     string                 `json:"request_id"`
+	Query         string                 `json:"query,omitempty"`
+	Content       string                 `json:"content,omitempty"`
+	Limit         int                    `json:"limit,omitempty"`
+	MinConfidence float32                `json:"min_confidence,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// HealthCheckResponse represents a health check response
+type HealthCheckResponse struct {
+	Status        string                 `json:"status"`
+	Layer         string                 `json:"layer"`
+	Timestamp     int64                  `json:"timestamp"`
+	UptimeSeconds int64                  `json:"uptime_seconds"`
+	Metrics       map[string]interface{} `json:"metrics"`
 }
 
 // SocketResponse represents a response sent via Unix socket
@@ -96,6 +106,7 @@ func NewUnixSocketServer(almInstance *alm.ALM, socketPath string) *UnixSocketSer
 		maxConns:   MaxConnections,
 		ctx:        ctx,
 		cancel:     cancel,
+		startTime:  time.Now(),
 	}
 }
 
@@ -577,6 +588,9 @@ func (s *UnixSocketServer) processRequestBinary(conn net.Conn, req *SocketReques
 	case "ping":
 		s.handlePingBinary(conn, req, startTime)
 
+	case "HealthCheck":
+		s.handleHealthCheckBinary(conn, req, startTime)
+
 	default:
 		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Unknown request type: %s", req.Type))
 	}
@@ -761,4 +775,53 @@ func (s *UnixSocketServer) handlePingBinary(conn net.Conn, req *SocketRequest, s
 	}
 
 	s.sendResponseBinary(conn, &resp)
+}
+
+func (s *UnixSocketServer) handleHealthCheckBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	// Get graph statistics
+	stats := s.alm.GetGraphStats()
+
+	// Calculate uptime
+	uptimeSeconds := int64(time.Since(s.startTime).Seconds())
+
+	// Build health check response
+	healthResp := HealthCheckResponse{
+		Status:        "healthy",
+		Layer:         "Layer3_ALM",
+		Timestamp:     time.Now().UnixMilli(),
+		UptimeSeconds: uptimeSeconds,
+		Metrics: map[string]interface{}{
+			"total_memories":     stats.TotalMemories,
+			"total_associations": stats.TotalAssociations,
+			"total_queries":      atomic.LoadUint64(&s.totalRequests),
+			"success_rate":       1.0, // Could track actual success rate
+			"avg_latency_us":     500,  // Average query latency (placeholder)
+			"graph_density":      stats.GraphDensity,
+			"active_connections": atomic.LoadInt32(&s.connCount),
+		},
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(healthResp)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Failed to marshal health response: %v", err))
+		return
+	}
+
+	// Write length prefix (4 bytes, little-endian u32)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(data)))
+
+	if _, err := conn.Write(lenBuf[:]); err != nil {
+		log.Printf("Failed to write health check response length: %v", err)
+		return
+	}
+
+	// Write response data
+	if _, err := conn.Write(data); err != nil {
+		log.Printf("Failed to write health check response data: %v", err)
+		return
+	}
+
+	atomic.AddUint64(&s.totalResponses, 1)
 }

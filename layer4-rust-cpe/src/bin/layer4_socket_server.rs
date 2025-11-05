@@ -39,7 +39,11 @@ struct ContextResponse {
     data: serde_json::Value,
 }
 
-async fn handle_connection(stream: UnixStream, layer: Arc<ContextPredictionLayer>) -> Result<()> {
+async fn handle_connection(
+    stream: UnixStream,
+    layer: Arc<ContextPredictionLayer>,
+    server_start_time: std::time::Instant,
+) -> Result<()> {
     use tokio::io::AsyncReadExt;
 
     let (mut read_half, mut write_half) = stream.into_split();
@@ -109,6 +113,7 @@ async fn handle_connection(stream: UnixStream, layer: Arc<ContextPredictionLayer
             "PredictContext" => handle_predict_context(&layer, &request).await,
             "GetContextHistory" => handle_get_context_history(&layer, &request).await,
             "Ping" => handle_ping(&request).await,
+            "HealthCheck" => handle_health_check(&layer, &request, server_start_time).await,
             _ => ContextResponse {
                 response_type: "error".to_string(),
                 request_id: request.request_id,
@@ -263,6 +268,37 @@ async fn handle_ping(request: &ContextRequest) -> ContextResponse {
     }
 }
 
+async fn handle_health_check(
+    _layer: &Arc<ContextPredictionLayer>,
+    request: &ContextRequest,
+    server_start_time: std::time::Instant,
+) -> ContextResponse {
+    let timestamp = current_timestamp();
+    let uptime_seconds = server_start_time.elapsed().as_secs();
+
+    // TODO: Get actual metrics from the layer
+    // For now, return placeholder metrics
+    let metrics = serde_json::json!({
+        "total_predictions": 0,
+        "cache_hit_rate": 0.0,
+        "avg_latency_us": 200,
+        "success_rate": 1.0,
+    });
+
+    ContextResponse {
+        response_type: "HealthCheck_Response".to_string(),
+        request_id: request.request_id.clone(),
+        success: true,
+        data: serde_json::json!({
+            "status": "healthy",
+            "layer": "Layer4_CPE",
+            "timestamp": timestamp,
+            "uptime_seconds": uptime_seconds,
+            "metrics": metrics,
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -289,9 +325,12 @@ async fn main() -> Result<()> {
     println!("✅ Layer 4 CPE socket server listening on {}", socket_path);
     println!("🔮 Operations: AddMemoryContext, PredictContext, GetContextHistory, Ping");
     
+    // Track server start time for health checks
+    let server_start_time = std::time::Instant::now();
+
     // Handle graceful shutdown
     tokio::select! {
-        result = serve_connections(listener, layer) => {
+        result = serve_connections(listener, layer, server_start_time) => {
             if let Err(e) = result {
                 eprintln!("❌ Server error: {}", e);
             }
@@ -305,17 +344,21 @@ async fn main() -> Result<()> {
             println!("✅ Server stopped successfully");
         }
     }
-    
+
     Ok(())
 }
 
-async fn serve_connections(listener: UnixListener, layer: Arc<ContextPredictionLayer>) -> Result<()> {
+async fn serve_connections(
+    listener: UnixListener,
+    layer: Arc<ContextPredictionLayer>,
+    server_start_time: std::time::Instant,
+) -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let layer_clone = Arc::clone(&layer);
-        
+
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, layer_clone).await {
+            if let Err(e) = handle_connection(stream, layer_clone, server_start_time).await {
                 eprintln!("Connection error: {}", e);
             }
         });

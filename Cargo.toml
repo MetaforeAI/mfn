@@ -98,3 +98,7 @@ path = "tests/stress/mfn_load_test.rs"
 [[test]]
 name = "full_system_test"
 path = "tests/integration/full_system_test.rs"
+
+[[test]]
+name = "health_check_test"
+path = "tests/integration/health_check_test.rs"
