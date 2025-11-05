@@ -2,6 +2,7 @@
 //!
 //! Graph-based associative memory search using petgraph.
 //! Traverses memory associations to find related content.
+//! Phase 2 optimization: parking_lot::RwLock for faster locking.
 
 use crate::types::{Memory, MemoryId, Query, SearchResult, Layer};
 use anyhow::{Context, Result};

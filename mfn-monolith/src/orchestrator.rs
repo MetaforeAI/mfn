@@ -55,19 +55,17 @@ pub async fn query_parallel(
     let l4_clone = l4.clone();
 
     // Execute all layers in parallel using tokio::join!
-    // Each layer runs in a blocking task to avoid blocking the async runtime
+    // Layer 1 and 3 use fast async operations (no blocking needed - Phase 2 optimization)
+    // Layer 2 and 4 use spawn_blocking for CPU-intensive work
     let (r1, r2, r3, r4) = tokio::join!(
-        // Layer 1: Exact match (fastest, <1µs)
-        tokio::task::spawn_blocking({
-            let q = query.clone();
-            move || {
-                let start = Instant::now();
-                let result = l1_clone.get(&q);
-                let latency = start.elapsed().as_micros() as u64;
-                (result, latency)
-            }
-        }),
-        // Layer 2: Similarity search (10-100µs)
+        // Layer 1: Exact match (fastest, <1µs) - Direct call, no blocking needed
+        async {
+            let start = Instant::now();
+            let result = l1_clone.get(&query);
+            let latency = start.elapsed().as_micros() as u64;
+            Ok::<_, tokio::task::JoinError>((result, latency))
+        },
+        // Layer 2: Similarity search (10-100µs) - CPU-intensive, needs blocking
         tokio::task::spawn_blocking({
             let q = query.clone();
             move || {
@@ -77,17 +75,14 @@ pub async fn query_parallel(
                 (result, latency)
             }
         }),
-        // Layer 3: Graph traversal
-        tokio::task::spawn_blocking({
-            let q = query.clone();
-            move || {
-                let start = Instant::now();
-                let result = l3_clone.traverse(&q, 3); // depth=3 for graph traversal
-                let latency = start.elapsed().as_micros() as u64;
-                (result, latency)
-            }
-        }),
-        // Layer 4: Context prediction
+        // Layer 3: Graph traversal - Read-heavy with fast RwLock, no blocking needed
+        async {
+            let start = Instant::now();
+            let result = l3_clone.traverse(&query, 3); // depth=3 for graph traversal
+            let latency = start.elapsed().as_micros() as u64;
+            Ok::<_, tokio::task::JoinError>((result, latency))
+        },
+        // Layer 4: Context prediction - CPU-intensive, needs blocking
         tokio::task::spawn_blocking({
             let q = query.clone();
             move || {

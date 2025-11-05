@@ -13,6 +13,7 @@ members = [
     "mfn-core",
     "mfn-integration",
     "mfn-binary-protocol",
+    "mfn-monolith",
 ]
 
 [dependencies]

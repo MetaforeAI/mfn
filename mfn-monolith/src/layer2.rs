@@ -3,17 +3,16 @@
 //! High-performance similarity search using:
 //! - SIMD-accelerated cosine similarity (4-8x speedup)
 //! - Dense memory storage for cache efficiency
-//! - LRU caching for repeated queries (from Phase 1 optimization)
+//! - Lock-free concurrent caching (DashMap, Phase 2 optimization)
 //! - Target: 10-100µs search time (vs 7-10ms baseline)
 
 use crate::types::{Memory, Query, SearchResult, Layer};
 use anyhow::{Result, anyhow};
-use lru::LruCache;
-use parking_lot::Mutex;
+use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// SIMD width - process this many f32s at once
 /// Using 8 for AVX2 (8x f32), falls back to 4 for SSE (4x f32)
@@ -37,9 +36,13 @@ pub struct SimilarityIndex {
     /// Embedding dimension
     embedding_dim: usize,
 
-    /// LRU cache: query_hash -> Vec<SearchResult>
-    /// 10,000 entry capacity from Phase 1 optimization
-    cache: Arc<Mutex<LruCache<u64, Vec<SearchResult>>>>,
+    /// Lock-free concurrent cache: query_hash -> (results, timestamp)
+    /// DashMap provides concurrent access without global locks (Phase 2 optimization)
+    /// 10,000 entry capacity with approximate LRU eviction via timestamp
+    cache: Arc<DashMap<u64, (Vec<SearchResult>, Instant)>>,
+
+    /// Maximum cache size for eviction
+    cache_max_size: usize,
 
     /// Feature flag: use SIMD acceleration
     use_simd: bool,
@@ -57,6 +60,7 @@ impl Clone for SimilarityIndex {
             embeddings: self.embeddings.clone(),
             embedding_dim: self.embedding_dim,
             cache: Arc::clone(&self.cache),
+            cache_max_size: self.cache_max_size,
             use_simd: self.use_simd,
             total_queries: std::sync::atomic::AtomicU64::new(
                 self.total_queries.load(std::sync::atomic::Ordering::Relaxed)
@@ -78,15 +82,15 @@ impl SimilarityIndex {
     /// * `capacity` - Initial capacity for memories
     /// * `use_simd` - Enable SIMD acceleration (recommended)
     pub fn new(capacity: usize, use_simd: bool) -> Result<Self> {
-        let cache = Arc::new(Mutex::new(
-            LruCache::new(NonZeroUsize::new(10_000).unwrap())
-        ));
+        let cache_max_size = 10_000;
+        let cache = Arc::new(DashMap::with_capacity(cache_max_size));
 
         Ok(Self {
             memories: Vec::with_capacity(capacity),
             embeddings: Vec::with_capacity(capacity * 384), // Assume 384D embeddings
             embedding_dim: 0, // Will be set on first add
             cache,
+            cache_max_size,
             use_simd,
             total_queries: std::sync::atomic::AtomicU64::new(0),
             cache_hits: std::sync::atomic::AtomicU64::new(0),
@@ -117,10 +121,7 @@ impl SimilarityIndex {
 
         // CRITICAL: Invalidate cache when adding new memories
         // New memories change similarity landscape, making cached results stale
-        {
-            let mut cache = self.cache.lock();
-            cache.clear();
-        }
+        self.cache.clear();
 
         Ok(())
     }
@@ -135,11 +136,11 @@ impl SimilarityIndex {
         self.memories.is_empty()
     }
 
-    /// Similarity search with caching
+    /// Similarity search with lock-free caching
     ///
     /// Returns top-k most similar memories based on cosine similarity
     pub fn search(&self, query: &Query, top_k: usize) -> Result<Vec<SearchResult>> {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         // Extract query embedding
         let query_embedding = query.embedding
@@ -157,27 +158,30 @@ impl SimilarityIndex {
         // Compute query hash for cache key
         let query_hash = Self::compute_query_hash(query_embedding);
 
-        // Check cache first
-        {
-            let mut cache = self.cache.lock();
-            if let Some(cached_results) = cache.get(&query_hash) {
-                // Cache hit
-                self.cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.total_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Check cache first (lock-free read)
+        if let Some(entry) = self.cache.get(&query_hash) {
+            // Clone results while holding read lock
+            let cached_results = entry.value().0.clone();
+            drop(entry); // Release read lock
 
-                let duration = start.elapsed();
-                tracing::debug!(
-                    duration_us = duration.as_micros(),
-                    cache_hit = true,
-                    results_count = cached_results.len(),
-                    "Layer 2 search completed (cache hit)"
-                );
+            // Cache hit - update timestamp for approximate LRU (after releasing read lock)
+            self.cache.insert(query_hash, (cached_results.clone(), Instant::now()));
 
-                // Return truncated results if needed
-                let mut results = cached_results.clone();
-                results.truncate(top_k);
-                return Ok(results);
-            }
+            self.cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.total_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let duration = start.elapsed();
+            tracing::debug!(
+                duration_us = duration.as_micros(),
+                cache_hit = true,
+                results_count = cached_results.len(),
+                "Layer 2 search completed (cache hit)"
+            );
+
+            // Return truncated results if needed
+            let mut results = cached_results;
+            results.truncate(top_k);
+            return Ok(results);
         }
 
         // Cache miss: perform similarity search
@@ -218,11 +222,18 @@ impl SimilarityIndex {
             })
             .collect();
 
-        // Cache the results
-        {
-            let mut cache = self.cache.lock();
-            cache.put(query_hash, results.clone());
+        // Cache the results with eviction if needed
+        if self.cache.len() >= self.cache_max_size {
+            // Simple eviction: remove oldest entry (approximate LRU)
+            if let Some(oldest) = self.cache.iter()
+                .min_by_key(|entry| entry.value().1)
+                .map(|e| *e.key())
+            {
+                self.cache.remove(&oldest);
+            }
         }
+
+        self.cache.insert(query_hash, (results.clone(), Instant::now()));
 
         self.total_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -259,10 +270,7 @@ impl SimilarityIndex {
             0.0
         };
 
-        let cache_size = {
-            let cache = self.cache.lock();
-            cache.len()
-        };
+        let cache_size = self.cache.len();
 
         Layer2Stats {
             total_queries,
@@ -796,10 +804,7 @@ mod benches {
             let start = Instant::now();
             for _ in 0..iterations {
                 // Clear cache each time to measure cold performance
-                {
-                    let mut _cache = index_simd.cache.lock();
-                    // Force cache miss by not using same query
-                }
+                index_simd.cache.clear();
                 let _ = index_simd.search(&query, 10).unwrap();
             }
             let duration = start.elapsed();
