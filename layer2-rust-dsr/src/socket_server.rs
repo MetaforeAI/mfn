@@ -692,12 +692,13 @@ impl SocketServer {
 
         // Build metrics JSON
         let metrics = serde_json::json!({
-            "total_memories": stats.total_memories,
-            "total_queries": stats.total_searches,
-            "success_rate": stats.search_success_rate,
-            "avg_latency_us": stats.avg_search_time_ms * 1000.0, // Convert ms to us
-            "reservoir_utilization": stats.reservoir_utilization,
-            "wells_active": stats.wells_used,
+            "total_queries": stats.total_queries,
+            "total_additions": stats.total_additions,
+            "cache_hits": stats.cache_hits,
+            "similarity_wells_count": stats.similarity_wells_count,
+            "reservoir_size": stats.reservoir_size,
+            "average_well_activation": stats.average_well_activation,
+            "memory_usage_mb": stats.memory_usage_mb,
         });
 
         SocketResponse::HealthCheckResponse {
