@@ -28,19 +28,18 @@ rm -f /tmp/mfn_layer*.sock
 # Start Layer 1 (Zig IFR)
 echo -e "${GREEN}Starting Layer 1 (Zig IFR)...${NC}"
 cd layer1-zig-ifr || cd src/layers/layer1-ifr || { echo -e "${RED}Layer 1 directory not found${NC}"; exit 1; }
-if [ -f "build.zig" ]; then
-    zig build-exe src/socket_main.zig -O ReleaseFast 2>/dev/null || \
-    zig build-exe src/socket_main.zig 2>/dev/null || \
-    { echo -e "${RED}Failed to build Layer 1${NC}"; }
-
-    if [ -f "socket_main" ]; then
-        ./socket_main > /tmp/layer1.log 2>&1 &
-        echo -e "${GREEN}✓ Layer 1 started (PID: $!)${NC}"
+if [ -f "zig-out/bin/ifr_socket_server" ]; then
+    ./zig-out/bin/ifr_socket_server > /tmp/layer1.log 2>&1 &
+    echo -e "${GREEN}✓ Layer 1 started (PID: $!)${NC}"
+elif [ -f "build.zig" ]; then
+    if zig build 2>/dev/null; then
+        ./zig-out/bin/ifr_socket_server > /tmp/layer1.log 2>&1 &
+        echo -e "${GREEN}✓ Layer 1 built and started (PID: $!)${NC}"
     else
-        echo -e "${YELLOW}⚠ Layer 1 binary not found${NC}"
+        echo -e "${RED}Failed to build Layer 1${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠ Layer 1 build.zig not found${NC}"
+    echo -e "${YELLOW}⚠ Layer 1 not found${NC}"
 fi
 cd - > /dev/null
 
