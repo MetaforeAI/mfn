@@ -74,6 +74,8 @@ pub struct LayerQueryResult {
 pub struct Layer1Client {
     socket_path: String,
     connection_timeout: Duration,
+    connection: Arc<Mutex<Option<UnixStream>>>,
+    last_used: Arc<Mutex<Instant>>,
 }
 
 impl Layer1Client {
@@ -81,19 +83,44 @@ impl Layer1Client {
         Ok(Self {
             socket_path: LAYER1_SOCKET_PATH.to_string(),
             connection_timeout: Duration::from_millis(5000),
+            connection: Arc::new(Mutex::new(None)),
+            last_used: Arc::new(Mutex::new(Instant::now())),
         })
     }
 
     pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
         let start = Instant::now();
 
-        // Connect to Layer 1 socket
-        let stream = timeout(
-            self.connection_timeout,
-            UnixStream::connect(&self.socket_path)
-        ).await
-            .map_err(|_| anyhow!("Layer 1 connection timeout"))?
-            .map_err(|e| anyhow!("Layer 1 connection failed: {}", e))?;
+        // Try to reuse existing connection
+        let stream = {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+
+            if let Some(existing) = conn.take() {
+                // Check if connection is stale (>30s idle)
+                if last_used.elapsed() < Duration::from_secs(30) {
+                    existing
+                } else {
+                    // Stale connection, create new
+                    debug!("Layer 1 connection stale, reconnecting");
+                    timeout(
+                        self.connection_timeout,
+                        UnixStream::connect(&self.socket_path)
+                    ).await
+                        .map_err(|_| anyhow!("Layer 1 connection timeout"))?
+                        .map_err(|e| anyhow!("Layer 1 connection failed: {}", e))?
+                }
+            } else {
+                // No connection exists, create new
+                debug!("Layer 1 creating new connection");
+                timeout(
+                    self.connection_timeout,
+                    UnixStream::connect(&self.socket_path)
+                ).await
+                    .map_err(|_| anyhow!("Layer 1 connection timeout"))?
+                    .map_err(|e| anyhow!("Layer 1 connection failed: {}", e))?
+            }
+        };
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -110,12 +137,31 @@ impl Layer1Client {
 
         // Read response
         let mut response_line = String::new();
-        reader.read_line(&mut response_line).await?;
+        let read_result = reader.read_line(&mut response_line).await;
+
+        // Reconstruct stream from split parts for reuse
+        let stream = reader.into_inner().reunite(writer);
+
+        // Handle read errors
+        if let Err(e) = read_result {
+            warn!("Layer 1 read failed: {}, connection will not be reused", e);
+            return Err(anyhow!("Layer 1 read failed: {}", e));
+        }
 
         // Parse JSON response
         let response: serde_json::Value = serde_json::from_str(&response_line)?;
 
         let processing_time = start.elapsed().as_millis() as f64;
+
+        // Return connection to pool for reuse
+        if let Ok(reunited_stream) = stream {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+            *conn = Some(reunited_stream);
+            *last_used = Instant::now();
+        } else {
+            debug!("Layer 1 failed to reunite stream, connection will not be reused");
+        }
 
         // Convert response to LayerQueryResult
         if response["success"].as_bool().unwrap_or(false) {
@@ -197,6 +243,8 @@ pub struct Layer2Client {
     connection_timeout: Duration,
     embedding_service: Arc<EmbeddingService>,
     embedding_cache: Arc<Mutex<LruCache<String, Vec<f32>>>>,
+    connection: Arc<Mutex<Option<UnixStream>>>,
+    last_used: Arc<Mutex<Instant>>,
 }
 
 impl Layer2Client {
@@ -208,19 +256,44 @@ impl Layer2Client {
             embedding_cache: Arc::new(Mutex::new(
                 LruCache::new(NonZeroUsize::new(100_000).unwrap())
             )),
+            connection: Arc::new(Mutex::new(None)),
+            last_used: Arc::new(Mutex::new(Instant::now())),
         })
     }
 
     pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
         let start = Instant::now();
 
-        // Connect to Layer 2 socket
-        let stream = timeout(
-            self.connection_timeout,
-            UnixStream::connect(&self.socket_path)
-        ).await
-            .map_err(|_| anyhow!("Layer 2 connection timeout"))?
-            .map_err(|e| anyhow!("Layer 2 connection failed: {}", e))?;
+        // Try to reuse existing connection
+        let stream = {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+
+            if let Some(existing) = conn.take() {
+                // Check if connection is stale (>30s idle)
+                if last_used.elapsed() < Duration::from_secs(30) {
+                    existing
+                } else {
+                    // Stale connection, create new
+                    debug!("Layer 2 connection stale, reconnecting");
+                    timeout(
+                        self.connection_timeout,
+                        UnixStream::connect(&self.socket_path)
+                    ).await
+                        .map_err(|_| anyhow!("Layer 2 connection timeout"))?
+                        .map_err(|e| anyhow!("Layer 2 connection failed: {}", e))?
+                }
+            } else {
+                // No connection exists, create new
+                debug!("Layer 2 creating new connection");
+                timeout(
+                    self.connection_timeout,
+                    UnixStream::connect(&self.socket_path)
+                ).await
+                    .map_err(|_| anyhow!("Layer 2 connection timeout"))?
+                    .map_err(|e| anyhow!("Layer 2 connection failed: {}", e))?
+            }
+        };
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -269,11 +342,30 @@ impl Layer2Client {
 
         // Read response
         let mut response_line = String::new();
-        reader.read_line(&mut response_line).await?;
+        let read_result = reader.read_line(&mut response_line).await;
+
+        // Reconstruct stream from split parts for reuse
+        let stream = reader.into_inner().reunite(writer);
+
+        // Handle read errors
+        if let Err(e) = read_result {
+            warn!("Layer 2 read failed: {}, connection will not be reused", e);
+            return Err(anyhow!("Layer 2 read failed: {}", e));
+        }
 
         let response: serde_json::Value = serde_json::from_str(&response_line)?;
 
         let processing_time = start.elapsed().as_millis() as f64;
+
+        // Return connection to pool for reuse
+        if let Ok(reunited_stream) = stream {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+            *conn = Some(reunited_stream);
+            *last_used = Instant::now();
+        } else {
+            debug!("Layer 2 failed to reunite stream, connection will not be reused");
+        }
 
         // Convert response to LayerQueryResult
         if response["success"].as_bool().unwrap_or(false) {
@@ -314,6 +406,8 @@ impl Layer2Client {
 pub struct Layer3Client {
     socket_path: String,
     connection_timeout: Duration,
+    connection: Arc<Mutex<Option<UnixStream>>>,
+    last_used: Arc<Mutex<Instant>>,
 }
 
 impl Layer3Client {
@@ -321,19 +415,44 @@ impl Layer3Client {
         Ok(Self {
             socket_path: LAYER3_SOCKET_PATH.to_string(),
             connection_timeout: Duration::from_millis(5000),
+            connection: Arc::new(Mutex::new(None)),
+            last_used: Arc::new(Mutex::new(Instant::now())),
         })
     }
 
     pub async fn query(&self, query: &UniversalSearchQuery) -> Result<LayerQueryResult> {
         let start = Instant::now();
 
-        // Connect to Layer 3 socket
-        let stream = timeout(
-            self.connection_timeout,
-            UnixStream::connect(&self.socket_path)
-        ).await
-            .map_err(|_| anyhow!("Layer 3 connection timeout"))?
-            .map_err(|e| anyhow!("Layer 3 connection failed: {}", e))?;
+        // Try to reuse existing connection
+        let stream = {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+
+            if let Some(existing) = conn.take() {
+                // Check if connection is stale (>30s idle)
+                if last_used.elapsed() < Duration::from_secs(30) {
+                    existing
+                } else {
+                    // Stale connection, create new
+                    debug!("Layer 3 connection stale, reconnecting");
+                    timeout(
+                        self.connection_timeout,
+                        UnixStream::connect(&self.socket_path)
+                    ).await
+                        .map_err(|_| anyhow!("Layer 3 connection timeout"))?
+                        .map_err(|e| anyhow!("Layer 3 connection failed: {}", e))?
+                }
+            } else {
+                // No connection exists, create new
+                debug!("Layer 3 creating new connection");
+                timeout(
+                    self.connection_timeout,
+                    UnixStream::connect(&self.socket_path)
+                ).await
+                    .map_err(|_| anyhow!("Layer 3 connection timeout"))?
+                    .map_err(|e| anyhow!("Layer 3 connection failed: {}", e))?
+            }
+        };
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -352,11 +471,30 @@ impl Layer3Client {
 
         // Read response
         let mut response_line = String::new();
-        reader.read_line(&mut response_line).await?;
+        let read_result = reader.read_line(&mut response_line).await;
+
+        // Reconstruct stream from split parts for reuse
+        let stream = reader.into_inner().reunite(writer);
+
+        // Handle read errors
+        if let Err(e) = read_result {
+            warn!("Layer 3 read failed: {}, connection will not be reused", e);
+            return Err(anyhow!("Layer 3 read failed: {}", e));
+        }
 
         let response: serde_json::Value = serde_json::from_str(&response_line)?;
 
         let processing_time = start.elapsed().as_millis() as f64;
+
+        // Return connection to pool for reuse
+        if let Ok(reunited_stream) = stream {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+            *conn = Some(reunited_stream);
+            *last_used = Instant::now();
+        } else {
+            debug!("Layer 3 failed to reunite stream, connection will not be reused");
+        }
 
         // Convert response to LayerQueryResult
         if response["success"].as_bool().unwrap_or(false) {
@@ -397,6 +535,8 @@ impl Layer3Client {
 pub struct Layer4Client {
     socket_path: String,
     connection_timeout: Duration,
+    connection: Arc<Mutex<Option<UnixStream>>>,
+    last_used: Arc<Mutex<Instant>>,
 }
 
 impl Layer4Client {
@@ -404,6 +544,8 @@ impl Layer4Client {
         Ok(Self {
             socket_path: LAYER4_SOCKET_PATH.to_string(),
             connection_timeout: Duration::from_millis(5000),
+            connection: Arc::new(Mutex::new(None)),
+            last_used: Arc::new(Mutex::new(Instant::now())),
         })
     }
 
@@ -411,13 +553,36 @@ impl Layer4Client {
         use tokio::io::AsyncReadExt;
         let start = Instant::now();
 
-        // Connect to Layer 4 socket
-        let stream = timeout(
-            self.connection_timeout,
-            UnixStream::connect(&self.socket_path)
-        ).await
-            .map_err(|_| anyhow!("Layer 4 connection timeout"))?
-            .map_err(|e| anyhow!("Layer 4 connection failed: {}", e))?;
+        // Try to reuse existing connection
+        let stream = {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+
+            if let Some(existing) = conn.take() {
+                // Check if connection is stale (>30s idle)
+                if last_used.elapsed() < Duration::from_secs(30) {
+                    existing
+                } else {
+                    // Stale connection, create new
+                    debug!("Layer 4 connection stale, reconnecting");
+                    timeout(
+                        self.connection_timeout,
+                        UnixStream::connect(&self.socket_path)
+                    ).await
+                        .map_err(|_| anyhow!("Layer 4 connection timeout"))?
+                        .map_err(|e| anyhow!("Layer 4 connection failed: {}", e))?
+                }
+            } else {
+                // No connection exists, create new
+                debug!("Layer 4 creating new connection");
+                timeout(
+                    self.connection_timeout,
+                    UnixStream::connect(&self.socket_path)
+                ).await
+                    .map_err(|_| anyhow!("Layer 4 connection timeout"))?
+                    .map_err(|e| anyhow!("Layer 4 connection failed: {}", e))?
+            }
+        };
 
         let (mut reader, mut writer) = stream.into_split();
 
@@ -441,15 +606,41 @@ impl Layer4Client {
 
         // Read response: 4-byte length + JSON
         let mut len_buf = [0u8; 4];
-        reader.read_exact(&mut len_buf).await?;
+        let read_len_result = reader.read_exact(&mut len_buf).await;
+
+        // Handle read errors early
+        if let Err(e) = read_len_result {
+            warn!("Layer 4 read length failed: {}, connection will not be reused", e);
+            return Err(anyhow!("Layer 4 read length failed: {}", e));
+        }
+
         let response_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut response_buf = vec![0u8; response_len];
-        reader.read_exact(&mut response_buf).await?;
+        let read_result = reader.read_exact(&mut response_buf).await;
+
+        // Reconstruct stream from split parts for reuse
+        let stream = reader.reunite(writer);
+
+        // Handle read errors
+        if let Err(e) = read_result {
+            warn!("Layer 4 read response failed: {}, connection will not be reused", e);
+            return Err(anyhow!("Layer 4 read response failed: {}", e));
+        }
 
         let response: serde_json::Value = serde_json::from_slice(&response_buf)?;
 
         let processing_time = start.elapsed().as_millis() as f64;
+
+        // Return connection to pool for reuse
+        if let Ok(reunited_stream) = stream {
+            let mut conn = self.connection.lock().await;
+            let mut last_used = self.last_used.lock().await;
+            *conn = Some(reunited_stream);
+            *last_used = Instant::now();
+        } else {
+            debug!("Layer 4 failed to reunite stream, connection will not be reused");
+        }
 
         // Convert response to LayerQueryResult
         if response["success"].as_bool().unwrap_or(false) {
