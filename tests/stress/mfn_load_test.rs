@@ -46,10 +46,10 @@ async fn create_mfn_system() -> Result<Arc<SocketMfnIntegration>> {
             eprintln!("❌ Failed to connect to layers: {}", e);
             eprintln!("   Some layers may not be running.");
             eprintln!("   Check that all socket servers are listening:");
-            eprintln!("   - Layer 1 (Zig IFR): /tmp/layer1_ifr.sock");
-            eprintln!("   - Layer 2 (Rust DSR): /tmp/layer2_dsr.sock");
-            eprintln!("   - Layer 3 (Go ALM): /tmp/layer3_alm.sock");
-            eprintln!("   - Layer 4 (Rust CPE): /tmp/layer4_cpe.sock");
+            eprintln!("   - Layer 1 (Zig IFR): /tmp/mfn_layer1.sock");
+            eprintln!("   - Layer 2 (Rust DSR): /tmp/mfn_layer2.sock");
+            eprintln!("   - Layer 3 (Go ALM): /tmp/mfn_layer3.sock");
+            eprintln!("   - Layer 4 (Rust CPE): /tmp/mfn_layer4.sock");
             e
         })?;
 
