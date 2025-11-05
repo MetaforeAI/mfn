@@ -755,6 +755,35 @@ impl LayerConnectionPool {
         }
         Ok(())
     }
+
+    /// Extract clients from pool for independent concurrent access
+    /// Consumes the pool and returns individual clients
+    pub fn into_clients(mut self) -> (
+        Option<Layer1Client>,
+        Option<Layer2Client>,
+        Option<Layer3Client>,
+        Option<Layer4Client>,
+    ) {
+        // Attempt to initialize all clients
+        // This is best-effort - some may fail if servers aren't running
+        if self.layer1.is_none() {
+            self.layer1 = Layer1Client::new().ok();
+        }
+        if self.layer2.is_none() {
+            let embedding_service = Arc::clone(&self.embedding_service);
+            self.layer2 = futures::executor::block_on(
+                Layer2Client::new(embedding_service)
+            ).ok();
+        }
+        if self.layer3.is_none() {
+            self.layer3 = futures::executor::block_on(Layer3Client::new()).ok();
+        }
+        if self.layer4.is_none() {
+            self.layer4 = futures::executor::block_on(Layer4Client::new()).ok();
+        }
+
+        (self.layer1, self.layer2, self.layer3, self.layer4)
+    }
 }
 
 // Base64 encoding support for binary data
