@@ -13,7 +13,7 @@ members = [
     "mfn-core",
     "mfn-integration",
     "mfn-binary-protocol",
-    "mfn-monolith",
+    "mfn-monolith", "layer5-rust-psr",
 ]
 exclude = ["lmdb-benchmark"]
 
