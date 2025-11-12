@@ -412,8 +412,14 @@ impl SocketServer {
                             }
                         };
 
-                        // Process request
-                        let response = Self::process_request(&request, &dsr, &config, server_start_time).await;
+                        // Process request with connection ID
+                        let response = Self::process_request(
+                            &request,
+                            &dsr,
+                            &config,
+                            server_start_time,
+                            Some(connection_id.clone()),
+                        ).await;
 
                         // Send binary response: length (4 bytes) + JSON
                         let response_bytes = response.as_bytes();
@@ -463,16 +469,24 @@ impl SocketServer {
             }
         }
 
+        // Clean up wells associated with this connection
+        if let Err(e) = dsr.cleanup_connection(&connection_id).await {
+            error!("Failed to cleanup connection {}: {}", connection_id, e);
+        } else {
+            debug!("Cleaned up wells for connection {}", connection_id);
+        }
+
         debug!("Connection {} handler finished", connection_id);
         Ok(())
     }
 
-    /// Process a request and route to appropriate handler
+    /// Process a request and route to appropriate handler with connection context
     async fn process_request(
         request: &SocketRequest,
         dsr: &Arc<DynamicSimilarityReservoir>,
         config: &SocketServerConfig,
         server_start_time: Instant,
+        connection_id: Option<String>,
     ) -> String {
         let start_time = Instant::now();
 
@@ -487,6 +501,7 @@ impl SocketServer {
                     metadata.clone().unwrap_or_default(),
                     dsr,
                     start_time,
+                    connection_id,
                 ).await
             },
             SocketRequest::SimilaritySearch { request_id, query_embedding, top_k, min_confidence, timeout_ms } => {
@@ -531,7 +546,7 @@ impl SocketServer {
         })
     }
 
-    /// Handle add memory request
+    /// Handle add memory request with connection tracking
     async fn handle_add_memory(
         request_id: String,
         memory_id: u64,
@@ -541,10 +556,16 @@ impl SocketServer {
         metadata: HashMap<String, String>,
         dsr: &Arc<DynamicSimilarityReservoir>,
         start_time: Instant,
+        connection_id: Option<String>,
     ) -> SocketResponse {
         let embedding_array = ndarray::Array1::from(embedding);
 
-        match dsr.add_memory(MemoryId(memory_id), &embedding_array, content).await {
+        match dsr.add_memory_with_connection(
+            MemoryId(memory_id),
+            &embedding_array,
+            content,
+            connection_id,
+        ).await {
             Ok(_) => {
                 let processing_time = start_time.elapsed().as_secs_f32() * 1000.0;
                 SocketResponse::Success {
@@ -690,15 +711,18 @@ impl SocketServer {
         // Get DSR statistics
         let stats = dsr.get_performance_stats().await;
 
-        // Build metrics JSON
+        // Build metrics JSON with memory management stats
         let metrics = serde_json::json!({
             "total_queries": stats.total_queries,
             "total_additions": stats.total_additions,
             "cache_hits": stats.cache_hits,
             "similarity_wells_count": stats.similarity_wells_count,
+            "max_wells": stats.max_wells,
+            "wells_evicted": stats.wells_evicted,
             "reservoir_size": stats.reservoir_size,
             "average_well_activation": stats.average_well_activation,
             "memory_usage_mb": stats.memory_usage_mb,
+            "connection_count": stats.connection_count,
         });
 
         SocketResponse::HealthCheckResponse {

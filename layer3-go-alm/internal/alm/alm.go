@@ -3,6 +3,7 @@ package alm
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -22,16 +23,17 @@ type ALM struct {
 	monitor           *PerformanceMonitor
 	pool              *ObjectPool
 	cache             *MemoryCache
-	
+	goroutinePool     *GoroutinePool  // Goroutine pool to prevent exhaustion
+
 	// Concurrency control
 	mu        sync.RWMutex
 	ctx       context.Context
 	cancel    context.CancelFunc
-	
+
 	// Background tasks
 	gcTicker  *time.Ticker
 	wg        sync.WaitGroup
-	
+
 	// Performance optimizations
 	useOptimizedSearch bool
 }
@@ -49,8 +51,13 @@ func NewALM(config *config.ALMConfig) (*ALM, error) {
 		useOptimizedSearch: true, // Enable optimized search by default
 	}
 	
-	// Initialize memory graph
-	graph, err := NewMemoryGraph(config.MaxMemories, config.MaxAssociations)
+	// Initialize memory graph with full configuration
+	graph, err := NewMemoryGraphWithConfig(
+		config.MaxMemories,
+		config.MaxAssociations,
+		config.MaxEdgesPerNode,
+		config.EdgeTTL,
+	)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create memory graph: %w", err)
@@ -60,7 +67,10 @@ func NewALM(config *config.ALMConfig) (*ALM, error) {
 	// Initialize performance optimizations
 	alm.pool = NewObjectPool()
 	alm.cache = NewMemoryCache(10000, 5000, 2000)
-	
+
+	// Initialize goroutine pool
+	alm.goroutinePool = NewGoroutinePool(config.MaxGoroutines)
+
 	// Initialize both searchers
 	alm.searcher = NewAssociativeSearcher(alm.graph, config)
 	alm.optimizedSearcher = NewOptimizedSearcher(alm.graph, config)
@@ -110,8 +120,12 @@ func (alm *ALM) AddMemory(memory *Memory) error {
 	memoriesAddedCounter.Inc()
 	
 	// Auto-discover associations if enabled
-	if alm.config.EnableAutoDiscovery {
-		go alm.discoverAssociations(memory)
+	if alm.config.EnableAutoDiscovery && alm.goroutinePool != nil {
+		// Use goroutine pool to prevent exhaustion
+		memCopy := *memory // Copy to avoid closure issues
+		alm.goroutinePool.Submit(func() {
+			alm.discoverAssociations(&memCopy)
+		})
 	}
 	
 	return nil
@@ -254,16 +268,43 @@ func (alm *ALM) GetPerformanceMetrics() *PerformanceMetrics {
 
 // GetComprehensiveMetrics returns detailed performance metrics
 func (alm *ALM) GetComprehensiveMetrics() map[string]interface{} {
+	metrics := make(map[string]interface{})
+
+	// Add monitor stats if available
 	if alm.monitor != nil {
-		return alm.monitor.GetComprehensiveStats()
+		for k, v := range alm.monitor.GetComprehensiveStats() {
+			metrics[k] = v
+		}
+	} else {
+		// Fallback to basic metrics
+		metrics["basic_metrics"] = alm.GetPerformanceMetrics()
 	}
-	
-	// Fallback to basic metrics
-	basicMetrics := alm.GetPerformanceMetrics()
-	return map[string]interface{}{
-		"basic_metrics": basicMetrics,
-		"timestamp":    time.Now(),
+
+	// Add goroutine pool stats
+	if alm.goroutinePool != nil {
+		poolStats := alm.goroutinePool.GetStats()
+		metrics["goroutine_pool"] = map[string]interface{}{
+			"worker_count":   poolStats.WorkerCount,
+			"active_count":   poolStats.ActiveCount,
+			"queue_length":   poolStats.QueueLength,
+			"total_executed": poolStats.TotalExecuted,
+			"max_workers":    poolStats.MaxWorkers,
+		}
 	}
+
+	// Add memory stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	metrics["memory"] = map[string]interface{}{
+		"alloc_mb":       m.Alloc / 1024 / 1024,
+		"total_alloc_mb": m.TotalAlloc / 1024 / 1024,
+		"sys_mb":         m.Sys / 1024 / 1024,
+		"num_gc":         m.NumGC,
+		"goroutines":     runtime.NumGoroutine(),
+	}
+
+	metrics["timestamp"] = time.Now()
+	return metrics
 }
 
 // GetGraph returns the underlying memory graph
@@ -274,21 +315,26 @@ func (alm *ALM) GetGraph() *MemoryGraph {
 // Close shuts down the ALM and releases resources
 func (alm *ALM) Close() error {
 	alm.cancel()
-	
+
 	if alm.gcTicker != nil {
 		alm.gcTicker.Stop()
 	}
-	
+
+	// Close goroutine pool
+	if alm.goroutinePool != nil {
+		alm.goroutinePool.Close()
+	}
+
 	// Close optimized searcher
 	if alm.optimizedSearcher != nil {
 		alm.optimizedSearcher.Close()
 	}
-	
+
 	// Close performance monitor
 	if alm.monitor != nil {
 		alm.monitor.Stop()
 	}
-	
+
 	alm.wg.Wait()
 	return nil
 }
@@ -299,7 +345,7 @@ func (alm *ALM) startBackgroundTasks() {
 	if alm.config.GCInterval > 0 {
 		alm.gcTicker = time.NewTicker(alm.config.GCInterval)
 		alm.wg.Add(1)
-		
+
 		go func() {
 			defer alm.wg.Done()
 			for {
@@ -312,16 +358,39 @@ func (alm *ALM) startBackgroundTasks() {
 			}
 		}()
 	}
-	
+
+	// TTL eviction task
+	if alm.config.EvictionInterval > 0 {
+		alm.wg.Add(1)
+
+		go func() {
+			defer alm.wg.Done()
+			ticker := time.NewTicker(alm.config.EvictionInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-alm.ctx.Done():
+					return
+				case <-ticker.C:
+					evicted := alm.graph.EvictExpiredEdges()
+					if evicted > 0 {
+						fmt.Printf("TTL Eviction: Removed %d expired edges\n", evicted)
+					}
+				}
+			}
+		}()
+	}
+
 	// Weight decay task
 	if alm.config.EnableWeightDecay && alm.config.WeightDecayRate > 0 {
 		alm.wg.Add(1)
-		
+
 		go func() {
 			defer alm.wg.Done()
 			ticker := time.NewTicker(1 * time.Minute)
 			defer ticker.Stop()
-			
+
 			for {
 				select {
 				case <-alm.ctx.Done():

@@ -66,6 +66,7 @@ pub use temporal::{
     PatternType,
     PredictionContext,
     PredictionType,
+    ConnectionId,
 };
 
 pub use error::{CpeError, CpeResult};

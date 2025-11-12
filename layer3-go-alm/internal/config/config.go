@@ -16,22 +16,26 @@ type ALMConfig struct {
 	// Graph configuration
 	MaxMemories         int           `json:"max_memories"`
 	MaxAssociations     int           `json:"max_associations"`
+	MaxEdgesPerNode     int           `json:"max_edges_per_node"`     // New: limit edges per node
 	DefaultAssocWeight  float64       `json:"default_assoc_weight"`
 	WeightDecayRate     float64       `json:"weight_decay_rate"`
-	
+
 	// Search configuration
 	MaxSearchDepth      int           `json:"max_search_depth"`
 	MaxSearchResults    int           `json:"max_search_results"`
 	SearchTimeout       time.Duration `json:"search_timeout"`
 	MinAssocThreshold   float64       `json:"min_assoc_threshold"`
-	
+
 	// Concurrency configuration
 	MaxSearchWorkers    int `json:"max_search_workers"`
 	MaxPathfindWorkers  int `json:"max_pathfind_workers"`
-	
+	MaxGoroutines       int `json:"max_goroutines"`          // New: limit total goroutines
+
 	// Memory management
 	GCInterval          time.Duration `json:"gc_interval"`
 	MaxIdleTime         time.Duration `json:"max_idle_time"`
+	EdgeTTL             time.Duration `json:"edge_ttl"`               // New: TTL for edges
+	EvictionInterval    time.Duration `json:"eviction_interval"`      // New: how often to evict
 	
 	// Performance optimizations
 	EnableObjectPooling bool `json:"enable_object_pooling"`
@@ -68,6 +72,7 @@ func DefaultConfig() *Config {
 		ALMConfig: ALMConfig{
 			MaxMemories:         1000000,
 			MaxAssociations:     5000000,
+			MaxEdgesPerNode:     1000,   // Limit edges per node
 			DefaultAssocWeight:  0.5,
 			WeightDecayRate:     0.01,
 			MaxSearchDepth:      5,
@@ -76,8 +81,11 @@ func DefaultConfig() *Config {
 			MinAssocThreshold:   0.1,
 			MaxSearchWorkers:    20,  // Increased from 10
 			MaxPathfindWorkers:  40,  // Increased from 20
+			MaxGoroutines:       100, // Limit total goroutines
 			GCInterval:          5 * time.Minute,
 			MaxIdleTime:         1 * time.Hour,
+			EdgeTTL:             24 * time.Hour,  // Edges expire after 24 hours
+			EvictionInterval:    30 * time.Minute, // Run eviction every 30 minutes
 			
 			// Performance optimizations enabled
 			EnableObjectPooling:  true,

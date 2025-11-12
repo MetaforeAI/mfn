@@ -29,7 +29,7 @@ pub mod binary_protocol;
 
 // Re-exports for convenience
 pub use encoding::{SpikeEncoder, EncodingStrategy, SpikePattern};
-pub use reservoir::{SimilarityReservoir, NeuronState};
+pub use reservoir::{SimilarityReservoir, NeuronState, MemoryStats};
 pub use similarity::{SimilarityResults, SimilarityMatcher};
 pub use dynamics::{SpikeDynamics, TemporalWindow};
 pub use socket_server::{SocketServer, SocketServerConfig, SocketRequest, SocketResponse};
@@ -70,7 +70,7 @@ impl Default for DSRConfig {
             similarity_threshold: 0.7,
             competition_strength: 0.9,
             integration_window_ms: 10.0,
-            max_similarity_wells: 10000,
+            max_similarity_wells: 100_000,  // Increased to 100K default limit
         }
     }
 }
@@ -111,26 +111,49 @@ impl DynamicSimilarityReservoir {
     /// Add a new memory with its embedding to the reservoir
     /// Creates a dynamic attractor without retraining the network
     pub async fn add_memory(&self, memory_id: MemoryId, embedding: &Embedding, content: String) -> Result<()> {
+        self.add_memory_with_connection(memory_id, embedding, content, None).await
+    }
+
+    /// Add a new memory with its embedding to the reservoir with connection tracking
+    pub async fn add_memory_with_connection(
+        &self,
+        memory_id: MemoryId,
+        embedding: &Embedding,
+        content: String,
+        connection_id: Option<String>,
+    ) -> Result<()> {
         let start_time = std::time::Instant::now();
-        
+
         // Encode embedding to spike pattern
         let spike_pattern = self.encoder.encode(embedding.view())?;
-        
+
         // Create similarity well in reservoir
         {
             let mut reservoir = self.reservoir.write().await;
-            reservoir.create_similarity_well(memory_id, spike_pattern, content)?;
+            reservoir.create_similarity_well_with_connection(
+                memory_id,
+                spike_pattern,
+                content,
+                connection_id,
+            )?;
         }
 
         // Update metrics
         self.total_additions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        
+
         tracing::debug!(
             memory_id = memory_id.0,
             duration_ms = start_time.elapsed().as_secs_f32() * 1000.0,
             "Memory added to Layer 2"
         );
 
+        Ok(())
+    }
+
+    /// Clean up all wells associated with a connection
+    pub async fn cleanup_connection(&self, connection_id: &str) -> Result<()> {
+        let mut reservoir = self.reservoir.write().await;
+        reservoir.cleanup_connection(connection_id);
         Ok(())
     }
 
@@ -168,15 +191,19 @@ impl DynamicSimilarityReservoir {
     /// Get performance statistics for monitoring and optimization
     pub async fn get_performance_stats(&self) -> DSRPerformanceStats {
         let reservoir = self.reservoir.read().await;
-        
+        let memory_stats = reservoir.get_memory_stats();
+
         DSRPerformanceStats {
             total_queries: self.total_queries.load(std::sync::atomic::Ordering::Relaxed),
             total_additions: self.total_additions.load(std::sync::atomic::Ordering::Relaxed),
             cache_hits: self.cache_hits.load(std::sync::atomic::Ordering::Relaxed),
-            similarity_wells_count: reservoir.get_wells_count(),
+            similarity_wells_count: memory_stats.total_wells,
             reservoir_size: self.config.reservoir_size,
             average_well_activation: reservoir.get_average_activation(),
-            memory_usage_mb: reservoir.estimate_memory_usage() as f32 / 1_048_576.0,
+            memory_usage_mb: memory_stats.memory_usage_mb,
+            max_wells: memory_stats.max_wells,
+            wells_evicted: memory_stats.wells_evicted,
+            connection_count: memory_stats.connection_count,
         }
     }
 
@@ -213,6 +240,9 @@ impl DynamicSimilarityReservoir {
                     reservoir_size: self.config.reservoir_size,
                     average_well_activation: 0.0,
                     memory_usage_mb: 0.0,
+                    max_wells: self.config.max_similarity_wells,
+                    wells_evicted: 0,  // Cannot access without async
+                    connection_count: 0,  // Cannot access without async
                 }
             }
         }
@@ -240,6 +270,9 @@ pub struct DSRPerformanceStats {
     pub reservoir_size: usize,
     pub average_well_activation: f32,
     pub memory_usage_mb: f32,
+    pub max_wells: usize,
+    pub wells_evicted: u64,
+    pub connection_count: usize,
 }
 
 #[cfg(test)]

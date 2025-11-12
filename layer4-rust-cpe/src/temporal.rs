@@ -3,34 +3,127 @@
 
 use mfn_core::{MemoryId, Weight, current_timestamp};
 use mfn_core::memory_types::Timestamp;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, BTreeMap};
 use serde::{Deserialize, Serialize};
-use ndarray::{Array1, Array2};
-use nalgebra::{DMatrix, DVector};
+
+// Memory limits to prevent unbounded growth
+const MAX_NGRAM_ENTRIES: usize = 1_000_000;  // 1M max n-grams
+const MAX_PATTERNS: usize = 10_000;          // 10K max patterns per context
+const MIN_FREQUENCY_THRESHOLD: u32 = 3;      // Min occurrences to store n-gram
+const MAX_INTERVALS_STORED: usize = 100;     // Limit interval history
+const MAX_CONTEXTS_STORED: usize = 50;       // Limit context history
+
+/// Connection ID type for tracking patterns by connection
+pub type ConnectionId = String;
 
 /// Temporal pattern analyzer that detects recurring sequences in memory access
 #[derive(Debug)]
 pub struct TemporalAnalyzer {
     /// Configuration parameters
     config: TemporalConfig,
-    
+
     /// Sliding window of recent memory accesses
     access_window: VecDeque<MemoryAccess>,
-    
-    /// Detected patterns indexed by pattern signature
+
+    /// Detected patterns indexed by pattern signature with LRU tracking
     patterns: HashMap<PatternSignature, TemporalPattern>,
-    
+    pattern_lru: BTreeMap<Timestamp, PatternSignature>, // For LRU eviction
+
     /// N-gram frequency analysis for different sequence lengths
+    /// Limited to MAX_NGRAM_ENTRIES total entries
     ngram_frequencies: HashMap<usize, HashMap<Vec<MemoryId>, FrequencyData>>,
-    
+    ngram_count: usize, // Track total n-gram entries
+
+    /// Bloom filter for fast frequency checking (approximate membership)
+    ngram_bloom: BloomFilter,
+
     /// Markov chain transition probabilities
     transition_matrix: HashMap<MemoryId, HashMap<MemoryId, TransitionData>>,
-    
+
     /// Statistical models for temporal intervals
     interval_models: HashMap<PatternType, IntervalModel>,
-    
+
     /// Pattern matching state machine
     matcher: PatternMatcher,
+
+    /// Connection tracking for cleanup
+    connection_patterns: HashMap<ConnectionId, ConnectionData>,
+
+    /// Memory usage tracking
+    memory_stats: MemoryStats,
+}
+
+/// Memory usage statistics
+#[derive(Debug, Default)]
+struct MemoryStats {
+    ngram_bytes: usize,
+    pattern_bytes: usize,
+    total_allocations: usize,
+    last_cleanup: Timestamp,
+}
+
+/// Connection-specific data for cleanup
+#[derive(Debug)]
+struct ConnectionData {
+    patterns: Vec<PatternSignature>,
+    ngrams: Vec<(usize, Vec<MemoryId>)>, // (n, ngram)
+    last_activity: Timestamp,
+}
+
+/// Simple bloom filter for fast approximate membership testing
+#[derive(Debug)]
+struct BloomFilter {
+    bits: Vec<u64>,
+    size: usize,
+    hash_count: usize,
+}
+
+impl BloomFilter {
+    fn new(expected_items: usize) -> Self {
+        // Size bloom filter for ~1% false positive rate
+        let size = (expected_items * 10).next_power_of_two();
+        let word_count = (size + 63) / 64;
+        Self {
+            bits: vec![0; word_count],
+            size,
+            hash_count: 3, // 3 hash functions
+        }
+    }
+
+    fn insert(&mut self, key: &[MemoryId]) {
+        for i in 0..self.hash_count {
+            let hash = self.hash(key, i);
+            let word_idx = (hash / 64) % self.bits.len();
+            let bit_idx = hash % 64;
+            self.bits[word_idx] |= 1u64 << bit_idx;
+        }
+    }
+
+    fn contains(&self, key: &[MemoryId]) -> bool {
+        for i in 0..self.hash_count {
+            let hash = self.hash(key, i);
+            let word_idx = (hash / 64) % self.bits.len();
+            let bit_idx = hash % 64;
+            if (self.bits[word_idx] & (1u64 << bit_idx)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn hash(&self, key: &[MemoryId], seed: usize) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        seed.hash(&mut hasher);
+        hasher.finish() as usize % self.size
+    }
+
+    fn clear(&mut self) {
+        self.bits.fill(0);
+    }
 }
 
 /// Configuration for temporal analysis
@@ -38,22 +131,22 @@ pub struct TemporalAnalyzer {
 pub struct TemporalConfig {
     /// Maximum size of the access window
     pub max_window_size: usize,
-    
+
     /// Minimum occurrences to consider a pattern significant
     pub min_pattern_occurrences: u32,
-    
-    /// Maximum N-gram length to analyze
+
+    /// Maximum N-gram length to analyze (capped at 5 to prevent explosion)
     pub max_ngram_length: usize,
-    
+
     /// Minimum confidence threshold for predictions
     pub min_prediction_confidence: f64,
-    
+
     /// Time decay rate for pattern relevance (per hour)
     pub pattern_decay_rate: f64,
-    
+
     /// Maximum time gap to consider accesses as related (microseconds)
     pub max_sequence_gap_us: u64,
-    
+
     /// Enable advanced statistical analysis
     pub enable_statistical_modeling: bool,
 }
@@ -63,7 +156,7 @@ impl Default for TemporalConfig {
         Self {
             max_window_size: 10000,
             min_pattern_occurrences: 3,
-            max_ngram_length: 8,
+            max_ngram_length: 5, // Reduced from 8 to prevent combinatorial explosion
             min_prediction_confidence: 0.3,
             pattern_decay_rate: 0.1, // 10% decay per hour
             max_sequence_gap_us: 60_000_000, // 1 minute
@@ -81,6 +174,7 @@ pub struct MemoryAccess {
     pub user_context: Option<String>,
     pub session_id: Option<String>,
     pub confidence: Weight,
+    pub connection_id: Option<ConnectionId>, // Track connection
 }
 
 /// Type of memory access
@@ -107,6 +201,7 @@ pub struct TemporalPattern {
     pub last_occurrence: Timestamp,
     pub created_at: Timestamp,
     pub context_features: Vec<ContextFeature>,
+    pub last_access: Timestamp, // For LRU tracking
 }
 
 /// Pattern signature for efficient matching
@@ -142,13 +237,13 @@ pub struct ContextFeature {
     pub weight: Weight,
 }
 
-/// Frequency data for N-gram analysis
+/// Frequency data for N-gram analysis (with limits)
 #[derive(Debug, Clone)]
 struct FrequencyData {
     count: u32,
     last_seen: Timestamp,
-    intervals: Vec<u64>,
-    contexts: Vec<String>,
+    intervals: VecDeque<u64>, // Limited to MAX_INTERVALS_STORED
+    contexts: VecDeque<String>, // Limited to MAX_CONTEXTS_STORED
 }
 
 /// Transition data for Markov chain
@@ -208,64 +303,185 @@ impl TemporalAnalyzer {
             config,
             access_window: VecDeque::new(),
             patterns: HashMap::new(),
+            pattern_lru: BTreeMap::new(),
             ngram_frequencies: HashMap::new(),
+            ngram_count: 0,
+            ngram_bloom: BloomFilter::new(MAX_NGRAM_ENTRIES),
             transition_matrix: HashMap::new(),
             interval_models: HashMap::new(),
             matcher: PatternMatcher {
                 active_matches: HashMap::new(),
                 completed_matches: Vec::new(),
             },
+            connection_patterns: HashMap::new(),
+            memory_stats: MemoryStats::default(),
         }
     }
 
     /// Add a new memory access and update pattern analysis
     pub fn add_access(&mut self, access: MemoryAccess) {
+        // Track connection if provided
+        if let Some(conn_id) = &access.connection_id {
+            self.track_connection(conn_id.clone(), &access);
+        }
+
         // Add to sliding window
         self.access_window.push_back(access.clone());
-        
+
         // Maintain window size
         while self.access_window.len() > self.config.max_window_size {
             self.access_window.pop_front();
         }
 
-        // Update N-gram analysis
+        // Update N-gram analysis with frequency threshold
         self.update_ngram_analysis(&access);
-        
+
         // Update Markov chain
         self.update_transition_matrix(&access);
-        
+
         // Update pattern matching
         self.update_pattern_matching(&access);
-        
+
         // Detect new patterns
         if self.access_window.len() >= 3 {
             self.detect_patterns();
         }
-        
+
         // Update statistical models
         if self.config.enable_statistical_modeling {
             self.update_statistical_models();
+        }
+
+        // Periodic cleanup (every 10000 accesses)
+        if self.ngram_count % 10000 == 0 {
+            self.cleanup_low_frequency_data();
+        }
+
+        // Check memory limits
+        self.enforce_memory_limits();
+    }
+
+    /// Track connection for cleanup
+    fn track_connection(&mut self, conn_id: ConnectionId, access: &MemoryAccess) {
+        let conn_data = self.connection_patterns.entry(conn_id).or_insert_with(|| {
+            ConnectionData {
+                patterns: Vec::new(),
+                ngrams: Vec::new(),
+                last_activity: access.timestamp,
+            }
+        });
+        conn_data.last_activity = access.timestamp;
+    }
+
+    /// Clean up data for a closed connection
+    pub fn cleanup_connection(&mut self, conn_id: &ConnectionId) {
+        if let Some(conn_data) = self.connection_patterns.remove(conn_id) {
+            // Remove patterns associated with this connection
+            for signature in &conn_data.patterns {
+                self.patterns.remove(signature);
+                // Remove from LRU tracking
+                self.pattern_lru.retain(|_, sig| sig != signature);
+            }
+
+            // Remove n-grams associated with this connection
+            for (n, ngram) in &conn_data.ngrams {
+                if let Some(freq_map) = self.ngram_frequencies.get_mut(n) {
+                    if freq_map.remove(ngram).is_some() {
+                        self.ngram_count = self.ngram_count.saturating_sub(1);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clean up low-frequency data to save memory
+    fn cleanup_low_frequency_data(&mut self) {
+        let mut removed_count = 0;
+
+        // Clean up n-grams below frequency threshold
+        for (_n, freq_map) in &mut self.ngram_frequencies {
+            freq_map.retain(|_, freq_data| {
+                let keep = freq_data.count >= MIN_FREQUENCY_THRESHOLD;
+                if !keep {
+                    removed_count += 1;
+                }
+                keep
+            });
+        }
+
+        self.ngram_count = self.ngram_count.saturating_sub(removed_count);
+
+        // Clean up old patterns (not accessed in last hour)
+        let one_hour_ago = current_timestamp().saturating_sub(3_600_000_000);
+        self.patterns.retain(|sig, pattern| {
+            let keep = pattern.last_access > one_hour_ago;
+            if !keep {
+                self.pattern_lru.retain(|_, s| s != sig);
+            }
+            keep
+        });
+
+        self.memory_stats.last_cleanup = current_timestamp();
+    }
+
+    /// Enforce memory limits using LRU eviction
+    fn enforce_memory_limits(&mut self) {
+        // Enforce n-gram limit
+        while self.ngram_count > MAX_NGRAM_ENTRIES {
+            // Remove least frequent n-grams
+            let mut min_freq = u32::MAX;
+            let mut min_key = None;
+
+            for (n, freq_map) in &self.ngram_frequencies {
+                for (ngram, freq_data) in freq_map {
+                    if freq_data.count < min_freq {
+                        min_freq = freq_data.count;
+                        min_key = Some((*n, ngram.clone()));
+                    }
+                }
+            }
+
+            if let Some((n, ngram)) = min_key {
+                if let Some(freq_map) = self.ngram_frequencies.get_mut(&n) {
+                    freq_map.remove(&ngram);
+                    self.ngram_count = self.ngram_count.saturating_sub(1);
+                }
+            } else {
+                break; // No n-grams to remove
+            }
+        }
+
+        // Enforce pattern limit using LRU
+        while self.patterns.len() > MAX_PATTERNS {
+            // Remove oldest accessed pattern
+            if let Some((timestamp, signature)) = self.pattern_lru.iter().next() {
+                let sig = signature.clone();
+                self.pattern_lru.remove(&timestamp.clone());
+                self.patterns.remove(&sig);
+            } else {
+                break;
+            }
         }
     }
 
     /// Predict next likely memory accesses
     pub fn predict_next(&self, context: &PredictionContext) -> Vec<PredictionResult> {
         let mut predictions = Vec::new();
-        
+
         // N-gram based predictions
         predictions.extend(self.ngram_predictions(context));
-        
+
         // Markov chain predictions
         predictions.extend(self.markov_predictions(context));
-        
+
         // Pattern completion predictions
         predictions.extend(self.pattern_completion_predictions(context));
-        
+
         // Statistical model predictions
         if self.config.enable_statistical_modeling {
             predictions.extend(self.statistical_predictions(context));
         }
-        
+
         // Merge and rank predictions
         self.merge_and_rank_predictions(predictions)
     }
@@ -288,6 +504,8 @@ impl TemporalAnalyzer {
             ngram_orders: self.ngram_frequencies.keys().cloned().collect(),
             average_pattern_confidence: self.calculate_average_confidence(),
             memory_usage_estimate: self.estimate_memory_usage(),
+            ngram_count: self.ngram_count,
+            connection_count: self.connection_patterns.len(),
         }
     }
 
@@ -296,7 +514,15 @@ impl TemporalAnalyzer {
             return;
         }
 
-        for n in 2..=self.config.max_ngram_length.min(self.access_window.len()) {
+        // Limit n-gram length to prevent explosion
+        let max_n = self.config.max_ngram_length.min(5).min(self.access_window.len());
+
+        for n in 2..=max_n {
+            // Check if we've hit the global n-gram limit
+            if self.ngram_count >= MAX_NGRAM_ENTRIES {
+                break;
+            }
+
             let ngram: Vec<MemoryId> = self.access_window
                 .iter()
                 .rev()
@@ -304,25 +530,59 @@ impl TemporalAnalyzer {
                 .map(|a| a.memory_id)
                 .collect();
 
+            // Check bloom filter first (fast approximate check)
+            let is_potentially_frequent = self.ngram_bloom.contains(&ngram);
+
             let frequencies = self.ngram_frequencies.entry(n).or_insert_with(HashMap::new);
-            let freq_data = frequencies.entry(ngram).or_insert_with(|| FrequencyData {
-                count: 0,
-                last_seen: 0,
-                intervals: Vec::new(),
-                contexts: Vec::new(),
-            });
 
-            // Update frequency data
-            if freq_data.count > 0 {
-                let interval = access.timestamp.saturating_sub(freq_data.last_seen);
-                freq_data.intervals.push(interval);
-            }
+            if let Some(freq_data) = frequencies.get_mut(&ngram) {
+                // Update existing n-gram
+                if freq_data.count > 0 {
+                    let interval = access.timestamp.saturating_sub(freq_data.last_seen);
 
-            freq_data.count += 1;
-            freq_data.last_seen = access.timestamp;
+                    // Limit interval history
+                    if freq_data.intervals.len() >= MAX_INTERVALS_STORED {
+                        freq_data.intervals.pop_front();
+                    }
+                    freq_data.intervals.push_back(interval);
+                }
 
-            if let Some(context) = &access.user_context {
-                freq_data.contexts.push(context.clone());
+                freq_data.count += 1;
+                freq_data.last_seen = access.timestamp;
+
+                if let Some(context) = &access.user_context {
+                    // Limit context history
+                    if freq_data.contexts.len() >= MAX_CONTEXTS_STORED {
+                        freq_data.contexts.pop_front();
+                    }
+                    freq_data.contexts.push_back(context.clone());
+                }
+            } else if is_potentially_frequent || frequencies.len() < 100 {
+                // Only add new n-gram if bloom filter says it might be frequent
+                // or we have very few n-grams of this length
+                let mut freq_data = FrequencyData {
+                    count: 1,
+                    last_seen: access.timestamp,
+                    intervals: VecDeque::new(),
+                    contexts: VecDeque::new(),
+                };
+
+                if let Some(context) = &access.user_context {
+                    freq_data.contexts.push_back(context.clone());
+                }
+
+                frequencies.insert(ngram.clone(), freq_data);
+                self.ngram_count += 1;
+
+                // Add to bloom filter
+                self.ngram_bloom.insert(&ngram);
+
+                // Track for connection cleanup if applicable
+                if let Some(conn_id) = &access.connection_id {
+                    if let Some(conn_data) = self.connection_patterns.get_mut(conn_id) {
+                        conn_data.ngrams.push((n, ngram));
+                    }
+                }
             }
         }
     }
@@ -343,9 +603,9 @@ impl TemporalAnalyzer {
                 });
 
             transition_data.count += 1;
-            
+
             let interval = access.timestamp.saturating_sub(previous_access.timestamp);
-            transition_data.average_interval = 
+            transition_data.average_interval =
                 (transition_data.average_interval + interval) / 2;
         }
 
@@ -356,7 +616,7 @@ impl TemporalAnalyzer {
     fn recalculate_transition_probabilities(&mut self) {
         for (_, transitions) in &mut self.transition_matrix {
             let total_count: u32 = transitions.values().map(|t| t.count).sum();
-            
+
             for transition in transitions.values_mut() {
                 transition.probability = transition.count as f64 / total_count as f64;
                 transition.confidence = (transition.count as f64 / total_count as f64).min(1.0);
@@ -367,13 +627,13 @@ impl TemporalAnalyzer {
     fn update_pattern_matching(&mut self, access: &MemoryAccess) {
         // Update active matches
         let mut completed_matches = Vec::new();
-        
+
         for pattern in self.patterns.values() {
             if let Some(match_state) = self.matcher.active_matches.get_mut(&pattern.signature) {
                 if pattern.sequence[match_state.matched_positions] == access.memory_id {
                     match_state.matched_positions += 1;
                     match_state.partial_sequence.push(access.memory_id);
-                    
+
                     // Check if pattern is complete
                     if match_state.matched_positions >= pattern.sequence.len() {
                         completed_matches.push(CompletedMatch {
@@ -395,7 +655,7 @@ impl TemporalAnalyzer {
                 self.matcher.active_matches.remove(&pattern.signature);
             }
             self.matcher.completed_matches.push(completed);
-            
+
             // Limit completed matches history
             if self.matcher.completed_matches.len() > 1000 {
                 self.matcher.completed_matches.truncate(500);
@@ -419,6 +679,11 @@ impl TemporalAnalyzer {
     }
 
     fn detect_patterns(&mut self) {
+        // Check if we've hit pattern limit
+        if self.patterns.len() >= MAX_PATTERNS {
+            return;
+        }
+
         // Analyze recent access window for new patterns
         let window_size = self.access_window.len().min(50); // Analyze last 50 accesses
         let recent_accesses: Vec<MemoryAccess> = self.access_window
@@ -429,7 +694,7 @@ impl TemporalAnalyzer {
             .collect();
 
         // Look for repeating subsequences
-        for length in 3..=8 {
+        for length in 3..=8.min(self.config.max_ngram_length) {
             if length * 2 > recent_accesses.len() {
                 continue;
             }
@@ -439,7 +704,7 @@ impl TemporalAnalyzer {
                     .iter()
                     .map(|a| a.memory_id)
                     .collect();
-                
+
                 let sequence2: Vec<MemoryId> = recent_accesses[start + length..start + length * 2]
                     .iter()
                     .map(|a| a.memory_id)
@@ -467,10 +732,15 @@ impl TemporalAnalyzer {
             if let Some(pattern) = self.patterns.get_mut(&signature) {
                 pattern.occurrences += 1;
                 pattern.last_occurrence = current_timestamp();
-                pattern.confidence = (pattern.occurrences as f64 / 
+                pattern.last_access = current_timestamp();
+                pattern.confidence = (pattern.occurrences as f64 /
                     (pattern.occurrences + 1) as f64).min(1.0);
+
+                // Update LRU tracking
+                self.pattern_lru.remove(&pattern.last_access);
+                self.pattern_lru.insert(current_timestamp(), signature.clone());
             }
-        } else if accesses.len() >= 3 {
+        } else if accesses.len() >= 3 && self.patterns.len() < MAX_PATTERNS {
             // Create new pattern
             let intervals: Vec<u64> = accesses.windows(2)
                 .map(|w| w[1].timestamp.saturating_sub(w[0].timestamp))
@@ -482,6 +752,8 @@ impl TemporalAnalyzer {
                 intervals.iter().sum::<u64>() / intervals.len() as u64
             };
 
+            let now = current_timestamp();
+
             let pattern = TemporalPattern {
                 id: format!("pattern_{}", uuid::Uuid::new_v4()),
                 signature: signature.clone(),
@@ -491,12 +763,23 @@ impl TemporalAnalyzer {
                 occurrences: 1,
                 average_interval_us: average_interval,
                 interval_variance: self.calculate_interval_variance(&intervals, average_interval),
-                last_occurrence: current_timestamp(),
-                created_at: current_timestamp(),
+                last_occurrence: now,
+                created_at: now,
                 context_features: self.extract_context_features(accesses),
+                last_access: now,
             };
 
-            self.patterns.insert(signature, pattern);
+            self.patterns.insert(signature.clone(), pattern);
+            self.pattern_lru.insert(now, signature.clone());
+
+            // Track for connection cleanup if applicable
+            if let Some(access) = accesses.first() {
+                if let Some(conn_id) = &access.connection_id {
+                    if let Some(conn_data) = self.connection_patterns.get_mut(conn_id) {
+                        conn_data.patterns.push(signature);
+                    }
+                }
+            }
         }
     }
 
@@ -609,9 +892,14 @@ impl TemporalAnalyzer {
 
                     if let Some(frequencies) = self.ngram_frequencies.get(&n) {
                         for (ngram, freq_data) in frequencies {
+                            // Only use n-grams with sufficient frequency
+                            if freq_data.count < MIN_FREQUENCY_THRESHOLD {
+                                continue;
+                            }
+
                             if ngram.starts_with(&prefix) && ngram.len() == prefix.len() + 1 {
                                 let next_memory = ngram[prefix.len()];
-                                let confidence = (freq_data.count as f64 / 
+                                let confidence = (freq_data.count as f64 /
                                     self.calculate_total_ngram_count(n) as f64).min(1.0);
 
                                 predictions.push(PredictionResult {
@@ -619,7 +907,7 @@ impl TemporalAnalyzer {
                                     confidence,
                                     prediction_type: PredictionType::NGramBased,
                                     estimated_time_us: freq_data.intervals
-                                        .last()
+                                        .back()
                                         .copied()
                                         .unwrap_or(0),
                                     contributing_evidence: vec![
@@ -792,7 +1080,7 @@ impl TemporalAnalyzer {
         &self,
         time_elapsed: u64,
         model: &IntervalModel,
-        expected_interval: u64,
+        _expected_interval: u64,
     ) -> f64 {
         match model.distribution_type {
             DistributionType::Normal => {
@@ -899,7 +1187,7 @@ impl TemporalAnalyzer {
         let mut predictions = predictions;
         // Group by memory_id and merge confidences
         let mut merged = HashMap::new();
-        
+
         for pred in predictions {
             let entry = merged.entry(pred.memory_id).or_insert_with(|| pred.clone());
             entry.confidence = (entry.confidence + pred.confidence) / 2.0; // Simple averaging
@@ -926,25 +1214,45 @@ impl TemporalAnalyzer {
         if self.patterns.is_empty() {
             return 0.0;
         }
-        
+
         self.patterns.values().map(|p| p.confidence).sum::<f64>() / self.patterns.len() as f64
     }
 
     fn estimate_memory_usage(&self) -> usize {
-        std::mem::size_of_val(self) +
-        self.access_window.capacity() * std::mem::size_of::<MemoryAccess>() +
-        self.patterns.len() * 256 + // Rough estimate
-        self.ngram_frequencies.len() * 128
+        let base = std::mem::size_of_val(self);
+        let window = self.access_window.capacity() * std::mem::size_of::<MemoryAccess>();
+        let patterns = self.patterns.len() * 256; // Rough estimate per pattern
+        let ngrams = self.ngram_count * 64; // Rough estimate per n-gram
+        let bloom = self.ngram_bloom.bits.len() * 8; // Bytes for bloom filter
+
+        base + window + patterns + ngrams + bloom
     }
 
     /// Clear all detected patterns and reset analyzer state
     pub fn clear_all_patterns(&mut self) {
         self.patterns.clear();
+        self.pattern_lru.clear();
         self.ngram_frequencies.clear();
+        self.ngram_count = 0;
+        self.ngram_bloom.clear();
         self.transition_matrix.clear();
         self.interval_models.clear();
         self.matcher.active_matches.clear();
         self.matcher.completed_matches.clear();
+        self.connection_patterns.clear();
+    }
+
+    /// Get memory usage statistics
+    pub fn get_memory_stats(&self) -> String {
+        format!(
+            "Memory Stats - N-grams: {}/{}, Patterns: {}/{}, Connections: {}, Est. Memory: {:.2} MB",
+            self.ngram_count,
+            MAX_NGRAM_ENTRIES,
+            self.patterns.len(),
+            MAX_PATTERNS,
+            self.connection_patterns.len(),
+            self.estimate_memory_usage() as f64 / 1_048_576.0
+        )
     }
 }
 
@@ -956,6 +1264,7 @@ pub struct PredictionContext {
     pub user_context: Option<String>,
     pub session_id: Option<String>,
     pub max_predictions: usize,
+    pub connection_id: Option<ConnectionId>,
 }
 
 /// Result of a prediction
@@ -987,14 +1296,16 @@ pub struct AnalyzerStatistics {
     pub ngram_orders: Vec<usize>,
     pub average_pattern_confidence: f64,
     pub memory_usage_estimate: usize,
+    pub ngram_count: usize,
+    pub connection_count: usize,
 }
 
 // Helper function to generate UUIDs (simple implementation)
 mod uuid {
     use rand::Rng;
-    
+
     pub struct Uuid(String);
-    
+
     impl Uuid {
         pub fn new_v4() -> Self {
             let mut rng = rand::thread_rng();
@@ -1009,7 +1320,7 @@ mod uuid {
             Uuid(uuid)
         }
     }
-    
+
     impl std::fmt::Display for Uuid {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{}", self.0)
