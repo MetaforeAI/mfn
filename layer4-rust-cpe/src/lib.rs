@@ -50,6 +50,7 @@
 pub mod temporal;
 pub mod prediction;
 pub mod error;
+pub mod persistence;
 
 // Re-export main types
 pub use prediction::{
@@ -70,6 +71,13 @@ pub use temporal::{
 };
 
 pub use error::{CpeError, CpeResult};
+
+pub use persistence::{
+    PersistenceConfig,
+    AofWriter, AofEntry, AofEntryType, AofHandle,
+    SnapshotCreator, WellSnapshot,
+    RecoveryManager, RecoveryStats,
+};
 
 // Re-export core MFN types for convenience
 pub use mfn_core::{
