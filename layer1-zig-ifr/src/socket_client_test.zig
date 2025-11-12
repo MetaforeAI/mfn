@@ -176,13 +176,13 @@ fn receiveBinaryResponse(stream: net.Stream, allocator: std.mem.Allocator) !stru
 } {
     // Read header
     var header_buffer: [@sizeOf(BinaryHeader)]u8 = undefined;
-    _ = try stream.readAll(header_buffer[0..]);
+    _ = try stream.read(header_buffer[0..]);
     
     const header = std.mem.bytesToValue(BinaryHeader, header_buffer[0..]);
     
     // Read payload
     const payload = try allocator.alloc(u8, header.payload_length);
-    _ = try stream.readAll(payload);
+    _ = try stream.read(payload);
     
     return .{
         .header = header,
