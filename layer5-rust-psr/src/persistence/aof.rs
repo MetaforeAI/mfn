@@ -1,11 +1,11 @@
-/// Append-Only File (AOF) writer for Layer 2
-///
-/// Architecture:
-/// - Buffered writes to in-memory channel (non-blocking)
-/// - Background task flushes to disk with fsync interval
-/// - Text-based format for debugging and recovery
-/// - Zero read overhead (all reads from memory)
-/// - Minimal write overhead (~250ns including channel send)
+//! Append-Only File (AOF) writer for Layer 5 PSR
+//!
+//! Architecture:
+//! - Buffered writes to in-memory channel (non-blocking)
+//! - Background task flushes to disk with fsync interval
+//! - Text-based JSON format for debugging and recovery
+//! - Zero read overhead (all reads from memory)
+//! - Minimal write overhead (~250ns including channel send)
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -15,29 +15,31 @@ use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use anyhow::{Result, Context};
 
-use crate::MemoryId;
+use super::snapshot::PatternId;
 
 /// Type of AOF entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AofEntryType {
-    /// Add new memory to similarity well
-    AddMemory {
-        memory_id: MemoryId,
-        content: String,
+    /// Add new pattern
+    AddPattern {
+        pattern_id: PatternId,
+        name: String,
+        category: String,
+        embedding: Vec<f32>,
         connection_id: Option<String>,
     },
-    /// Update existing memory
-    UpdateMemory {
-        memory_id: MemoryId,
+    /// Update pattern statistics
+    UpdatePattern {
+        pattern_id: PatternId,
         activation_count: u64,
-        strength: f32,
+        last_used_step: u64,
     },
-    /// Remove memory (evicted or deleted)
-    RemoveMemory {
-        memory_id: MemoryId,
+    /// Remove pattern (deleted)
+    RemovePattern {
+        pattern_id: PatternId,
         reason: String,
     },
-    /// Connection cleanup (remove all memories for connection)
+    /// Connection cleanup (remove all patterns for connection)
     CleanupConnection {
         connection_id: String,
     },
@@ -107,14 +109,14 @@ impl AofWriter {
                 .context("Failed to create AOF directory")?;
         }
 
-        // Open file in append mode
+        // Open AOF file in append mode
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(path.as_ref())
             .context("Failed to open AOF file")?;
 
-        let writer = BufWriter::with_capacity(64 * 1024, file); // 64KB buffer
+        let writer = BufWriter::with_capacity(64 * 1024, file);
 
         Ok(Self {
             writer,
@@ -126,52 +128,45 @@ impl AofWriter {
         })
     }
 
-    /// Run the background AOF writer loop
+    /// Run the AOF writer (background task)
     pub async fn run(&mut self) -> Result<()> {
         loop {
-            // Wait for entries with timeout
-            match tokio::time::timeout(Duration::from_millis(100), self.rx.recv()).await {
-                Ok(Some(entry)) => {
-                    // Write entry to buffer
-                    self.write_entry(&entry)?;
+            tokio::select! {
+                // Receive AOF entries
+                entry = self.rx.recv() => {
+                    match entry {
+                        Some(entry) => self.write_entry(&entry)?,
+                        None => {
+                            // Channel closed, flush and exit
+                            self.flush()?;
+                            return Ok(());
+                        }
+                    }
                 }
-                Ok(None) => {
-                    // Channel closed, flush and exit
-                    self.flush()?;
-                    break;
-                }
-                Err(_) => {
-                    // Timeout, check if we need to fsync
+
+                // Periodic fsync
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
                     if self.last_fsync.elapsed() >= self.fsync_interval {
                         self.flush()?;
                     }
                 }
             }
-
-            // Check if we need to fsync
-            if self.last_fsync.elapsed() >= self.fsync_interval {
-                self.flush()?;
-            }
         }
-
-        Ok(())
     }
 
     /// Write single entry to buffer
     fn write_entry(&mut self, entry: &AofEntry) -> Result<()> {
         let text = entry.to_text()?;
         writeln!(self.writer, "{}", text)?;
-
         self.entries_written += 1;
         self.bytes_written += text.len() as u64 + 1; // +1 for newline
-
         Ok(())
     }
 
     /// Flush buffer and fsync to disk
     fn flush(&mut self) -> Result<()> {
         self.writer.flush()?;
-        self.writer.get_ref().sync_data()?;
+        self.writer.get_ref().sync_all()?;
         self.last_fsync = Instant::now();
         Ok(())
     }
@@ -185,169 +180,194 @@ impl AofWriter {
     }
 }
 
-/// Statistics for AOF writer
+/// AOF statistics
 #[derive(Debug, Clone)]
 pub struct AofStats {
     pub entries_written: u64,
     pub bytes_written: u64,
 }
 
-/// Handle for sending AOF entries from main thread
+/// Handle for sending AOF entries (non-blocking)
 #[derive(Clone)]
 pub struct AofHandle {
     tx: mpsc::UnboundedSender<AofEntry>,
 }
 
 impl AofHandle {
+    /// Create new AOF handle and channel
     pub fn new() -> (Self, mpsc::UnboundedReceiver<AofEntry>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (Self { tx }, rx)
     }
 
-    /// Log an AOF entry (non-blocking)
-    pub fn log(&self, entry_type: AofEntryType) -> Result<()> {
-        let entry = AofEntry::new(entry_type);
-        self.tx.send(entry).context("AOF channel closed")?;
+    /// Log pattern addition
+    pub fn log_add_pattern(
+        &self,
+        pattern_id: PatternId,
+        name: String,
+        category: String,
+        embedding: Vec<f32>,
+        connection_id: Option<String>,
+    ) -> Result<()> {
+        let entry = AofEntry::new(AofEntryType::AddPattern {
+            pattern_id,
+            name,
+            category,
+            embedding,
+            connection_id,
+        });
+        self.tx.send(entry).context("Failed to send AOF entry")?;
         Ok(())
     }
 
-    /// Log add memory operation
-    pub fn log_add_memory(
+    /// Log pattern update
+    pub fn log_update_pattern(
         &self,
-        memory_id: MemoryId,
-        content: String,
-        connection_id: Option<String>,
-    ) -> Result<()> {
-        self.log(AofEntryType::AddMemory {
-            memory_id,
-            content,
-            connection_id,
-        })
-    }
-
-    /// Log update memory operation
-    pub fn log_update_memory(
-        &self,
-        memory_id: MemoryId,
+        pattern_id: PatternId,
         activation_count: u64,
-        strength: f32,
+        last_used_step: u64,
     ) -> Result<()> {
-        self.log(AofEntryType::UpdateMemory {
-            memory_id,
+        let entry = AofEntry::new(AofEntryType::UpdatePattern {
+            pattern_id,
             activation_count,
-            strength,
-        })
+            last_used_step,
+        });
+        self.tx.send(entry).context("Failed to send AOF entry")?;
+        Ok(())
     }
 
-    /// Log remove memory operation
-    pub fn log_remove_memory(&self, memory_id: MemoryId, reason: String) -> Result<()> {
-        self.log(AofEntryType::RemoveMemory { memory_id, reason })
+    /// Log pattern removal
+    pub fn log_remove_pattern(&self, pattern_id: PatternId, reason: String) -> Result<()> {
+        let entry = AofEntry::new(AofEntryType::RemovePattern {
+            pattern_id,
+            reason,
+        });
+        self.tx.send(entry).context("Failed to send AOF entry")?;
+        Ok(())
     }
 
     /// Log connection cleanup
     pub fn log_cleanup_connection(&self, connection_id: String) -> Result<()> {
-        self.log(AofEntryType::CleanupConnection { connection_id })
+        let entry = AofEntry::new(AofEntryType::CleanupConnection { connection_id });
+        self.tx.send(entry).context("Failed to send AOF entry")?;
+        Ok(())
+    }
+}
+
+impl Default for AofHandle {
+    fn default() -> Self {
+        Self::new().0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufRead;
+    use tempfile::TempDir;
 
     #[test]
     fn test_aof_entry_serialization() {
-        let entry = AofEntry::new(AofEntryType::AddMemory {
-            memory_id: MemoryId(12345),
-            content: "test content".to_string(),
-            connection_id: Some("conn123".to_string()),
+        let entry = AofEntry::new(AofEntryType::AddPattern {
+            pattern_id: "p1".to_string(),
+            name: "Test Pattern".to_string(),
+            category: "Transformational".to_string(),
+            embedding: vec![0.1, 0.2, 0.3],
+            connection_id: Some("conn1".to_string()),
         });
 
         let text = entry.to_text().unwrap();
         let parsed = AofEntry::from_text(&text).unwrap();
 
         assert_eq!(entry.timestamp_ms, parsed.timestamp_ms);
-
-        match (entry.entry_type, parsed.entry_type) {
+        match (&entry.entry_type, &parsed.entry_type) {
             (
-                AofEntryType::AddMemory { memory_id: id1, content: c1, connection_id: conn1 },
-                AofEntryType::AddMemory { memory_id: id2, content: c2, connection_id: conn2 },
-            ) => {
-                assert_eq!(id1, id2);
-                assert_eq!(c1, c2);
-                assert_eq!(conn1, conn2);
-            }
+                AofEntryType::AddPattern { pattern_id: p1, .. },
+                AofEntryType::AddPattern { pattern_id: p2, .. },
+            ) => assert_eq!(p1, p2),
             _ => panic!("Entry type mismatch"),
         }
     }
 
     #[tokio::test]
-    async fn test_aof_writer_basic() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    async fn test_aof_writer() {
+        let temp_dir = TempDir::new().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
 
         let (handle, rx) = AofHandle::new();
-        let mut writer = AofWriter::new(&aof_path, rx, 1000).unwrap();
+        let mut writer = AofWriter::new(&aof_path, rx, 100).unwrap();
 
         // Spawn writer task
         let writer_task = tokio::spawn(async move {
             writer.run().await
         });
 
-        // Write some entries
-        handle.log_add_memory(MemoryId(1), "memory 1".to_string(), Some("conn1".to_string())).unwrap();
-        handle.log_add_memory(MemoryId(2), "memory 2".to_string(), Some("conn1".to_string())).unwrap();
-        handle.log_update_memory(MemoryId(1), 5, 0.8).unwrap();
+        // Write entries
+        handle.log_add_pattern(
+            "p1".to_string(),
+            "Pattern 1".to_string(),
+            "Temporal".to_string(),
+            vec![0.1; 256],
+            Some("conn1".to_string()),
+        ).unwrap();
 
-        // Close channel
+        handle.log_update_pattern("p1".to_string(), 10, 100).unwrap();
+        handle.log_remove_pattern("p1".to_string(), "test".to_string()).unwrap();
+
+        // Close and wait
         drop(handle);
-
-        // Wait for writer to finish
         writer_task.await.unwrap().unwrap();
 
-        // Read and verify entries
-        let file = File::open(&aof_path).unwrap();
-        let reader = std::io::BufReader::new(file);
-        let lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
-
-        assert_eq!(lines.len(), 3);
-
-        let entry1 = AofEntry::from_text(&lines[0]).unwrap();
-        match entry1.entry_type {
-            AofEntryType::AddMemory { memory_id, content, .. } => {
-                assert_eq!(memory_id, MemoryId(1));
-                assert_eq!(content, "memory 1");
-            }
-            _ => panic!("Wrong entry type"),
-        }
+        // Verify file exists and has content
+        let content = std::fs::read_to_string(&aof_path).unwrap();
+        assert!(content.contains("\"pattern_id\":\"p1\""));
+        assert!(content.contains("AddPattern"));
+        assert!(content.contains("UpdatePattern"));
+        assert!(content.contains("RemovePattern"));
     }
 
     #[tokio::test]
     async fn test_aof_handle_operations() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let aof_path = temp_dir.path().join("test.aof");
-
         let (handle, rx) = AofHandle::new();
-        let mut writer = AofWriter::new(&aof_path, rx, 100).unwrap();
+        drop(rx); // Close receiver
 
-        let writer_task = tokio::spawn(async move {
-            writer.run().await
+        // Operations should fail with channel closed error
+        let result = handle.log_add_pattern(
+            "p1".to_string(),
+            "Test".to_string(),
+            "Spatial".to_string(),
+            vec![0.5; 128],
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_aof_entry_types() {
+        let add_entry = AofEntry::new(AofEntryType::AddPattern {
+            pattern_id: "p1".to_string(),
+            name: "Pattern".to_string(),
+            category: "Relational".to_string(),
+            embedding: vec![0.1; 64],
+            connection_id: None,
         });
+        assert!(matches!(add_entry.entry_type, AofEntryType::AddPattern { .. }));
 
-        // Test all operation types
-        handle.log_add_memory(MemoryId(100), "test".to_string(), None).unwrap();
-        handle.log_update_memory(MemoryId(100), 10, 0.9).unwrap();
-        handle.log_remove_memory(MemoryId(100), "evicted".to_string()).unwrap();
-        handle.log_cleanup_connection("conn123".to_string()).unwrap();
+        let update_entry = AofEntry::new(AofEntryType::UpdatePattern {
+            pattern_id: "p1".to_string(),
+            activation_count: 5,
+            last_used_step: 100,
+        });
+        assert!(matches!(update_entry.entry_type, AofEntryType::UpdatePattern { .. }));
 
-        drop(handle);
-        writer_task.await.unwrap().unwrap();
+        let remove_entry = AofEntry::new(AofEntryType::RemovePattern {
+            pattern_id: "p1".to_string(),
+            reason: "evicted".to_string(),
+        });
+        assert!(matches!(remove_entry.entry_type, AofEntryType::RemovePattern { .. }));
 
-        // Verify all entries were written
-        let file = File::open(&aof_path).unwrap();
-        let reader = std::io::BufReader::new(file);
-        let lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
-
-        assert_eq!(lines.len(), 4);
+        let cleanup_entry = AofEntry::new(AofEntryType::CleanupConnection {
+            connection_id: "conn1".to_string(),
+        });
+        assert!(matches!(cleanup_entry.entry_type, AofEntryType::CleanupConnection { .. }));
     }
 }

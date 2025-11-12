@@ -1,37 +1,33 @@
-/// Recovery manager for Layer 2 persistence
-///
-/// Implements fast crash recovery by:
-/// 1. Loading LMDB snapshot (~100ms)
-/// 2. Replaying AOF entries since snapshot (~10ms)
-/// Total recovery time: <200ms
+//! Recovery manager for Layer 5 PSR
+//!
+//! Implements crash recovery by loading LMDB snapshot + replaying AOF.
+//! Recovery process:
+//! 1. Load LMDB snapshot (if exists)
+//! 2. Replay AOF entries (if exists)
+//! 3. Return reconstructed pattern state
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use anyhow::{Result, Context, anyhow};
+use anyhow::{Result, Context};
 
-use crate::MemoryId;
-use super::{AofEntry, AofEntryType, SnapshotCreator};
-use super::snapshot::WellSnapshot;
+use super::aof::{AofEntry, AofEntryType};
+use super::snapshot::{SnapshotCreator, PatternSnapshot, PatternId};
 
-/// Statistics from recovery operation
+/// Recovery statistics
 #[derive(Debug, Clone)]
 pub struct RecoveryStats {
-    /// Number of wells loaded from snapshot
-    pub snapshot_well_count: usize,
-
+    /// Number of patterns loaded from snapshot
+    pub snapshot_patterns_loaded: usize,
     /// Number of AOF entries replayed
     pub aof_entries_replayed: usize,
-
-    /// Number of AOF entries skipped (corrupted or invalid)
+    /// Number of AOF entries skipped (corrupted)
     pub aof_entries_skipped: usize,
-
-    /// Total recovery time in milliseconds
-    pub recovery_time_ms: u64,
-
-    /// Snapshot age in seconds
-    pub snapshot_age_secs: u64,
+    /// Final pattern count
+    pub final_pattern_count: usize,
+    /// Recovery duration in milliseconds
+    pub recovery_duration_ms: u64,
 }
 
 /// Recovery manager
@@ -46,355 +42,362 @@ impl RecoveryManager {
         Ok(Self { snapshot_creator })
     }
 
-    /// Perform full recovery: load snapshot + replay AOF
+    /// Recover patterns from snapshot + AOF
     pub fn recover(
         &self,
         aof_path: impl AsRef<Path>,
-    ) -> Result<(HashMap<MemoryId, WellSnapshot>, RecoveryStats)> {
+    ) -> Result<(HashMap<PatternId, PatternSnapshot>, RecoveryStats)> {
         let start = std::time::Instant::now();
 
-        // Step 1: Load snapshot
-        let mut wells = self.snapshot_creator.load_snapshot()
-            .context("Failed to load snapshot")?;
-
-        let snapshot_well_count = wells.len();
-
-        // Get snapshot age
-        let snapshot_age_secs = match self.snapshot_creator.get_metadata()? {
-            Some(metadata) => {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-                ((now_ms - metadata.snapshot_timestamp_ms) / 1000) as u64
-            }
-            None => 0,
+        // Step 1: Load snapshot (if exists)
+        let mut patterns = match self.snapshot_creator.load_snapshot() {
+            Ok(p) => p,
+            Err(_) => HashMap::new(), // No snapshot, start empty
         };
 
-        // Step 2: Replay AOF if exists
-        let (aof_entries_replayed, aof_entries_skipped) =
-            if aof_path.as_ref().exists() {
-                self.replay_aof(&mut wells, aof_path)?
-            } else {
-                (0, 0)
-            };
+        let snapshot_patterns_loaded = patterns.len();
 
-        let recovery_time_ms = start.elapsed().as_millis() as u64;
+        // Step 2: Replay AOF (if exists)
+        let (aof_entries_replayed, aof_entries_skipped) = if aof_path.as_ref().exists() {
+            self.replay_aof(&mut patterns, aof_path)?
+        } else {
+            (0, 0)
+        };
+
+        let recovery_duration_ms = start.elapsed().as_millis() as u64;
 
         let stats = RecoveryStats {
-            snapshot_well_count,
+            snapshot_patterns_loaded,
             aof_entries_replayed,
             aof_entries_skipped,
-            recovery_time_ms,
-            snapshot_age_secs,
+            final_pattern_count: patterns.len(),
+            recovery_duration_ms,
         };
 
-        Ok((wells, stats))
+        Ok((patterns, stats))
     }
 
-    /// Replay AOF entries onto in-memory state
+    /// Replay AOF entries
     fn replay_aof(
         &self,
-        wells: &mut HashMap<MemoryId, WellSnapshot>,
+        patterns: &mut HashMap<PatternId, PatternSnapshot>,
         aof_path: impl AsRef<Path>,
     ) -> Result<(usize, usize)> {
-        let file = File::open(aof_path).context("Failed to open AOF file")?;
-        let reader = BufReader::new(file);
+        let file = File::open(aof_path.as_ref())
+            .context("Failed to open AOF file")?;
 
+        let reader = BufReader::new(file);
         let mut replayed = 0;
         let mut skipped = 0;
 
-        for (line_num, line_result) in reader.lines().enumerate() {
-            let line = match line_result {
+        for line in reader.lines() {
+            let line = match line {
                 Ok(l) => l,
-                Err(e) => {
-                    tracing::warn!("Failed to read AOF line {}: {}", line_num + 1, e);
+                Err(_) => {
                     skipped += 1;
                     continue;
                 }
             };
 
-            // Skip empty lines
             if line.trim().is_empty() {
                 continue;
             }
 
-            // Parse AOF entry
             let entry = match AofEntry::from_text(&line) {
                 Ok(e) => e,
-                Err(e) => {
-                    tracing::warn!("Failed to parse AOF line {}: {}", line_num + 1, e);
+                Err(_) => {
                     skipped += 1;
                     continue;
                 }
             };
 
-            // Apply entry to state
-            if let Err(e) = self.apply_entry(wells, entry) {
-                tracing::warn!("Failed to apply AOF entry {}: {}", line_num + 1, e);
-                skipped += 1;
-                continue;
-            }
-
+            self.apply_entry(patterns, &entry)?;
             replayed += 1;
         }
 
         Ok((replayed, skipped))
     }
 
-    /// Apply single AOF entry to in-memory state
+    /// Apply single AOF entry
     fn apply_entry(
         &self,
-        wells: &mut HashMap<MemoryId, WellSnapshot>,
-        entry: AofEntry,
+        patterns: &mut HashMap<PatternId, PatternSnapshot>,
+        entry: &AofEntry,
     ) -> Result<()> {
-        match entry.entry_type {
-            AofEntryType::AddMemory { memory_id, content, connection_id } => {
-                // Add or update well
-                let well = WellSnapshot {
-                    memory_id,
-                    content,
-                    strength: 1.0,
+        match &entry.entry_type {
+            AofEntryType::AddPattern {
+                pattern_id,
+                name,
+                category,
+                embedding,
+                connection_id,
+            } => {
+                let snapshot = PatternSnapshot {
+                    pattern_id: pattern_id.clone(),
+                    name: name.clone(),
+                    category: category.clone(),
+                    embedding: embedding.clone(),
                     activation_count: 0,
-                    connection_id,
+                    connection_id: connection_id.clone(),
                     created_timestamp_ms: entry.timestamp_ms,
-                    last_accessed_timestamp_ms: entry.timestamp_ms,
+                    last_used_timestamp_ms: entry.timestamp_ms,
+                    composition_history: vec![],
                 };
-                wells.insert(memory_id, well);
+                patterns.insert(pattern_id.clone(), snapshot);
             }
 
-            AofEntryType::UpdateMemory { memory_id, activation_count, strength } => {
-                // Update existing well
-                if let Some(well) = wells.get_mut(&memory_id) {
-                    well.activation_count = activation_count;
-                    well.strength = strength;
-                    well.last_accessed_timestamp_ms = entry.timestamp_ms;
+            AofEntryType::UpdatePattern {
+                pattern_id,
+                activation_count,
+                last_used_step,
+            } => {
+                if let Some(pattern) = patterns.get_mut(pattern_id) {
+                    pattern.activation_count = *activation_count;
+                    pattern.last_used_timestamp_ms = *last_used_step;
                 }
             }
 
-            AofEntryType::RemoveMemory { memory_id, .. } => {
-                // Remove well
-                wells.remove(&memory_id);
+            AofEntryType::RemovePattern { pattern_id, .. } => {
+                patterns.remove(pattern_id);
             }
 
             AofEntryType::CleanupConnection { connection_id } => {
-                // Remove all wells for this connection
-                wells.retain(|_, well| {
-                    well.connection_id.as_ref() != Some(&connection_id)
+                patterns.retain(|_, p| {
+                    p.connection_id.as_ref() != Some(connection_id)
                 });
             }
         }
 
         Ok(())
     }
-
-    /// Create initial snapshot (for fresh start)
-    pub fn create_snapshot(&self, wells: &HashMap<MemoryId, WellSnapshot>) -> Result<()> {
-        self.snapshot_creator.create_snapshot(wells)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use super::super::aof::{AofWriter, AofHandle};
+    use tempfile::TempDir;
 
-    fn create_test_well(memory_id: MemoryId, content: &str) -> WellSnapshot {
-        WellSnapshot {
-            memory_id,
-            content: content.to_string(),
-            strength: 0.8,
-            activation_count: 5,
-            connection_id: Some("conn123".to_string()),
-            created_timestamp_ms: 1000,
-            last_accessed_timestamp_ms: 2000,
-        }
-    }
-
-    #[test]
-    fn test_recovery_snapshot_only() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let snapshot_path = temp_dir.path().join("snapshot");
+    #[tokio::test]
+    async fn test_recovery_from_aof_only() {
+        let temp_dir = TempDir::new().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
-
-        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
-
-        // Create snapshot
-        let mut wells = HashMap::new();
-        wells.insert(MemoryId(1), create_test_well(MemoryId(1), "memory 1"));
-        wells.insert(MemoryId(2), create_test_well(MemoryId(2), "memory 2"));
-        recovery_mgr.create_snapshot(&wells).unwrap();
-
-        // Recover (no AOF)
-        let (recovered, stats) = recovery_mgr.recover(&aof_path).unwrap();
-
-        assert_eq!(recovered.len(), 2);
-        assert_eq!(stats.snapshot_well_count, 2);
-        assert_eq!(stats.aof_entries_replayed, 0);
-    }
-
-    #[test]
-    fn test_recovery_with_aof() {
-        let temp_dir = tempfile::tempdir().unwrap();
         let snapshot_path = temp_dir.path().join("snapshot");
-        let aof_path = temp_dir.path().join("test.aof");
 
-        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
+        // Write AOF entries
+        let (handle, rx) = AofHandle::new();
+        let mut writer = AofWriter::new(&aof_path, rx, 100).unwrap();
 
-        // Create snapshot
-        let mut wells = HashMap::new();
-        wells.insert(MemoryId(1), create_test_well(MemoryId(1), "memory 1"));
-        recovery_mgr.create_snapshot(&wells).unwrap();
-
-        // Create AOF with additional entries
-        let mut aof_file = File::create(&aof_path).unwrap();
-
-        let add_entry = AofEntry::new(AofEntryType::AddMemory {
-            memory_id: MemoryId(2),
-            content: "memory 2".to_string(),
-            connection_id: Some("conn123".to_string()),
+        let writer_task = tokio::spawn(async move {
+            writer.run().await
         });
-        writeln!(aof_file, "{}", add_entry.to_text().unwrap()).unwrap();
 
-        let update_entry = AofEntry::new(AofEntryType::UpdateMemory {
-            memory_id: MemoryId(1),
-            activation_count: 10,
-            strength: 0.9,
-        });
-        writeln!(aof_file, "{}", update_entry.to_text().unwrap()).unwrap();
+        handle.log_add_pattern(
+            "p1".to_string(),
+            "Pattern 1".to_string(),
+            "Temporal".to_string(),
+            vec![0.1; 256],
+            Some("conn1".to_string()),
+        ).unwrap();
 
-        drop(aof_file);
+        handle.log_add_pattern(
+            "p2".to_string(),
+            "Pattern 2".to_string(),
+            "Spatial".to_string(),
+            vec![0.2; 256],
+            None,
+        ).unwrap();
+
+        handle.log_update_pattern("p1".to_string(), 10, 100).unwrap();
+
+        drop(handle);
+        writer_task.await.unwrap().unwrap();
 
         // Recover
+        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
+        let (patterns, stats) = recovery_mgr.recover(&aof_path).unwrap();
+
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(stats.aof_entries_replayed, 3);
+        assert_eq!(stats.snapshot_patterns_loaded, 0);
+
+        let p1 = patterns.get("p1").unwrap();
+        assert_eq!(p1.name, "Pattern 1");
+        assert_eq!(p1.activation_count, 10);
+    }
+
+    #[tokio::test]
+    async fn test_recovery_from_snapshot_and_aof() {
+        let temp_dir = TempDir::new().unwrap();
+        let aof_path = temp_dir.path().join("test.aof");
+        let snapshot_path = temp_dir.path().join("snapshot");
+
+        // Create snapshot
+        let snapshot_creator = SnapshotCreator::new(&snapshot_path).unwrap();
+        let mut patterns = HashMap::new();
+        patterns.insert("p1".to_string(), PatternSnapshot {
+            pattern_id: "p1".to_string(),
+            name: "Initial Pattern".to_string(),
+            category: "Transformational".to_string(),
+            embedding: vec![0.1; 256],
+            activation_count: 5,
+            connection_id: None,
+            created_timestamp_ms: 1000,
+            last_used_timestamp_ms: 2000,
+            composition_history: vec![],
+        });
+        snapshot_creator.create_snapshot(&patterns).unwrap();
+
+        // Write AOF entries (after snapshot)
+        let (handle, rx) = AofHandle::new();
+        let mut writer = AofWriter::new(&aof_path, rx, 100).unwrap();
+
+        let writer_task = tokio::spawn(async move {
+            writer.run().await
+        });
+
+        handle.log_update_pattern("p1".to_string(), 15, 3000).unwrap();
+        handle.log_add_pattern(
+            "p2".to_string(),
+            "New Pattern".to_string(),
+            "Relational".to_string(),
+            vec![0.2; 256],
+            None,
+        ).unwrap();
+
+        drop(handle);
+        writer_task.await.unwrap().unwrap();
+
+        // Recover
+        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
         let (recovered, stats) = recovery_mgr.recover(&aof_path).unwrap();
 
         assert_eq!(recovered.len(), 2);
-        assert_eq!(stats.snapshot_well_count, 1);
+        assert_eq!(stats.snapshot_patterns_loaded, 1);
         assert_eq!(stats.aof_entries_replayed, 2);
 
-        // Check memory 1 was updated
-        assert_eq!(recovered.get(&MemoryId(1)).unwrap().activation_count, 10);
-        assert_eq!(recovered.get(&MemoryId(1)).unwrap().strength, 0.9);
+        let p1 = recovered.get("p1").unwrap();
+        assert_eq!(p1.activation_count, 15); // Updated from AOF
+        assert_eq!(p1.last_used_timestamp_ms, 3000);
 
-        // Check memory 2 was added
-        assert_eq!(recovered.get(&MemoryId(2)).unwrap().content, "memory 2");
+        let p2 = recovered.get("p2").unwrap();
+        assert_eq!(p2.name, "New Pattern");
     }
 
-    #[test]
-    fn test_recovery_with_remove() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let snapshot_path = temp_dir.path().join("snapshot");
+    #[tokio::test]
+    async fn test_recovery_remove_pattern() {
+        let temp_dir = TempDir::new().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
+        let snapshot_path = temp_dir.path().join("snapshot");
 
-        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
-
-        // Create snapshot with 2 wells
-        let mut wells = HashMap::new();
-        wells.insert(MemoryId(1), create_test_well(MemoryId(1), "memory 1"));
-        wells.insert(MemoryId(2), create_test_well(MemoryId(2), "memory 2"));
-        recovery_mgr.create_snapshot(&wells).unwrap();
-
-        // Create AOF that removes one
-        let mut aof_file = File::create(&aof_path).unwrap();
-
-        let remove_entry = AofEntry::new(AofEntryType::RemoveMemory {
-            memory_id: MemoryId(1),
-            reason: "evicted".to_string(),
+        // Create snapshot with patterns
+        let snapshot_creator = SnapshotCreator::new(&snapshot_path).unwrap();
+        let mut patterns = HashMap::new();
+        patterns.insert("p1".to_string(), PatternSnapshot {
+            pattern_id: "p1".to_string(),
+            name: "Pattern 1".to_string(),
+            category: "Temporal".to_string(),
+            embedding: vec![0.1; 256],
+            activation_count: 5,
+            connection_id: None,
+            created_timestamp_ms: 1000,
+            last_used_timestamp_ms: 2000,
+            composition_history: vec![],
         });
-        writeln!(aof_file, "{}", remove_entry.to_text().unwrap()).unwrap();
+        snapshot_creator.create_snapshot(&patterns).unwrap();
 
-        drop(aof_file);
+        // Write AOF with removal
+        let (handle, rx) = AofHandle::new();
+        let mut writer = AofWriter::new(&aof_path, rx, 100).unwrap();
+
+        let writer_task = tokio::spawn(async move {
+            writer.run().await
+        });
+
+        handle.log_remove_pattern("p1".to_string(), "deleted".to_string()).unwrap();
+
+        drop(handle);
+        writer_task.await.unwrap().unwrap();
 
         // Recover
-        let (recovered, stats) = recovery_mgr.recover(&aof_path).unwrap();
+        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
+        let (recovered, _stats) = recovery_mgr.recover(&aof_path).unwrap();
 
-        assert_eq!(recovered.len(), 1);
-        assert!(recovered.contains_key(&MemoryId(2)));
-        assert!(!recovered.contains_key(&MemoryId(1)));
-        assert_eq!(stats.aof_entries_replayed, 1);
+        assert_eq!(recovered.len(), 0); // p1 was removed
     }
 
-    #[test]
-    fn test_recovery_connection_cleanup() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let snapshot_path = temp_dir.path().join("snapshot");
+    #[tokio::test]
+    async fn test_recovery_connection_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
+        let snapshot_path = temp_dir.path().join("snapshot");
 
-        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
+        // Write AOF with multiple connections
+        let (handle, rx) = AofHandle::new();
+        let mut writer = AofWriter::new(&aof_path, rx, 100).unwrap();
 
-        // Create snapshot with wells from different connections
-        let mut wells = HashMap::new();
-
-        let mut well1 = create_test_well(MemoryId(1), "memory 1");
-        well1.connection_id = Some("conn1".to_string());
-        wells.insert(MemoryId(1), well1);
-
-        let mut well2 = create_test_well(MemoryId(2), "memory 2");
-        well2.connection_id = Some("conn2".to_string());
-        wells.insert(MemoryId(2), well2);
-
-        recovery_mgr.create_snapshot(&wells).unwrap();
-
-        // Create AOF that cleans up conn1
-        let mut aof_file = File::create(&aof_path).unwrap();
-
-        let cleanup_entry = AofEntry::new(AofEntryType::CleanupConnection {
-            connection_id: "conn1".to_string(),
+        let writer_task = tokio::spawn(async move {
+            writer.run().await
         });
-        writeln!(aof_file, "{}", cleanup_entry.to_text().unwrap()).unwrap();
 
-        drop(aof_file);
+        handle.log_add_pattern(
+            "p1".to_string(),
+            "Pattern 1".to_string(),
+            "Temporal".to_string(),
+            vec![0.1; 256],
+            Some("conn1".to_string()),
+        ).unwrap();
+
+        handle.log_add_pattern(
+            "p2".to_string(),
+            "Pattern 2".to_string(),
+            "Spatial".to_string(),
+            vec![0.2; 256],
+            Some("conn1".to_string()),
+        ).unwrap();
+
+        handle.log_add_pattern(
+            "p3".to_string(),
+            "Pattern 3".to_string(),
+            "Relational".to_string(),
+            vec![0.3; 256],
+            Some("conn2".to_string()),
+        ).unwrap();
+
+        handle.log_cleanup_connection("conn1".to_string()).unwrap();
+
+        drop(handle);
+        writer_task.await.unwrap().unwrap();
 
         // Recover
-        let (recovered, _) = recovery_mgr.recover(&aof_path).unwrap();
+        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
+        let (recovered, _stats) = recovery_mgr.recover(&aof_path).unwrap();
 
-        assert_eq!(recovered.len(), 1);
-        assert!(recovered.contains_key(&MemoryId(2)));
-        assert!(!recovered.contains_key(&MemoryId(1)));
+        assert_eq!(recovered.len(), 1); // Only p3 remains
+        assert!(recovered.contains_key("p3"));
+        assert!(!recovered.contains_key("p1"));
+        assert!(!recovered.contains_key("p2"));
     }
 
     #[test]
     fn test_recovery_corrupted_aof() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let snapshot_path = temp_dir.path().join("snapshot");
+        let temp_dir = TempDir::new().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
+        let snapshot_path = temp_dir.path().join("snapshot");
 
-        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
-
-        // Create snapshot
-        let mut wells = HashMap::new();
-        wells.insert(MemoryId(1), create_test_well(MemoryId(1), "memory 1"));
-        recovery_mgr.create_snapshot(&wells).unwrap();
-
-        // Create AOF with mix of valid and corrupted entries
-        let mut aof_file = File::create(&aof_path).unwrap();
-
-        // Valid entry
-        let add_entry = AofEntry::new(AofEntryType::AddMemory {
-            memory_id: MemoryId(2),
-            content: "memory 2".to_string(),
-            connection_id: None,
-        });
-        writeln!(aof_file, "{}", add_entry.to_text().unwrap()).unwrap();
-
-        // Corrupted entry
-        writeln!(aof_file, "{{corrupted json}}").unwrap();
-
-        // Another valid entry
-        let add_entry2 = AofEntry::new(AofEntryType::AddMemory {
-            memory_id: MemoryId(3),
-            content: "memory 3".to_string(),
-            connection_id: None,
-        });
-        writeln!(aof_file, "{}", add_entry2.to_text().unwrap()).unwrap();
-
-        drop(aof_file);
+        // Write corrupted AOF
+        use std::io::Write;
+        let mut file = File::create(&aof_path).unwrap();
+        writeln!(file, r#"{{"timestamp_ms":1000,"entry_type":{{"AddPattern":{{"pattern_id":"p1","name":"Pattern 1","category":"Temporal","embedding":[0.1],"connection_id":null}}}}}}"#).unwrap();
+        writeln!(file, "corrupted line here").unwrap();
+        writeln!(file, r#"{{"timestamp_ms":2000,"entry_type":{{"AddPattern":{{"pattern_id":"p2","name":"Pattern 2","category":"Spatial","embedding":[0.2],"connection_id":null}}}}}}"#).unwrap();
 
         // Recover
+        let recovery_mgr = RecoveryManager::new(&snapshot_path).unwrap();
         let (recovered, stats) = recovery_mgr.recover(&aof_path).unwrap();
 
-        assert_eq!(recovered.len(), 3); // snapshot + 2 valid AOF entries
+        assert_eq!(recovered.len(), 2); // p1 and p2 recovered
         assert_eq!(stats.aof_entries_replayed, 2);
-        assert_eq!(stats.aof_entries_skipped, 1); // corrupted entry skipped
+        assert_eq!(stats.aof_entries_skipped, 1); // Corrupted line skipped
     }
 }

@@ -66,20 +66,20 @@ impl SnapshotCreator {
         Ok(Self { env, db })
     }
 
-    /// Create snapshot from in-memory wells
-    pub fn create_snapshot(&self, wells: &HashMap<MemoryId, WellSnapshot>) -> Result<()> {
+    /// Create snapshot from in-memory patterns
+    pub fn create_snapshot(&self, patterns: &HashMap<PatternId, PatternSnapshot>) -> Result<()> {
         let mut txn = self.env.begin_rw_txn().context("Failed to begin transaction")?;
 
         // Clear existing data
         txn.clear_db(self.db).context("Failed to clear database")?;
 
-        // Write all wells
-        for (memory_id, well) in wells {
-            let key = memory_id.0.to_be_bytes();
-            let value = serde_json::to_vec(well).context("Failed to serialize well")?;
+        // Write all patterns
+        for (pattern_id, pattern) in patterns {
+            let key = pattern_id.as_bytes();
+            let value = serde_json::to_vec(pattern).context("Failed to serialize pattern")?;
 
             txn.put(self.db, &key, &value, WriteFlags::empty())
-                .context("Failed to write well")?;
+                .context("Failed to write pattern")?;
         }
 
         // Write metadata
@@ -88,7 +88,7 @@ impl SnapshotCreator {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            well_count: wells.len(),
+            pattern_count: patterns.len(),
             format_version: 1,
         };
 
@@ -105,27 +105,27 @@ impl SnapshotCreator {
     }
 
     /// Load snapshot into memory
-    pub fn load_snapshot(&self) -> Result<HashMap<MemoryId, WellSnapshot>> {
+    pub fn load_snapshot(&self) -> Result<HashMap<PatternId, PatternSnapshot>> {
         let txn = self.env.begin_ro_txn().context("Failed to begin transaction")?;
 
-        let mut wells = HashMap::new();
+        let mut patterns = HashMap::new();
 
+        // Try to open cursor - if database is empty, iter_start will error/panic
         let mut cursor = txn.open_ro_cursor(self.db).context("Failed to open cursor")?;
 
-        for (key, value) in cursor.iter_start() {
-            // Skip if key is not 8 bytes (memory_id is u64)
-            if key.len() != 8 {
-                continue;
-            }
+        // iter_start panics on empty database (LMDB limitation)
+        // We use iter() instead which gracefully handles empty databases
+        for (key, value) in cursor.iter() {
+            let pattern_id = String::from_utf8(key.to_vec())
+                .context("Failed to decode pattern ID")?;
 
-            let memory_id = u64::from_be_bytes(key.try_into().unwrap());
-            let well: WellSnapshot = serde_json::from_slice(value)
-                .context("Failed to deserialize well")?;
+            let pattern: PatternSnapshot = serde_json::from_slice(value)
+                .context("Failed to deserialize pattern")?;
 
-            wells.insert(MemoryId(memory_id), well);
+            patterns.insert(pattern_id, pattern);
         }
 
-        Ok(wells)
+        Ok(patterns)
     }
 
     /// Get snapshot metadata
@@ -162,15 +162,17 @@ impl SnapshotCreator {
 mod tests {
     use super::*;
 
-    fn create_test_well(memory_id: MemoryId, content: &str) -> WellSnapshot {
-        WellSnapshot {
-            memory_id,
-            content: content.to_string(),
-            strength: 0.8,
+    fn create_test_pattern(pattern_id: &str, name: &str) -> PatternSnapshot {
+        PatternSnapshot {
+            pattern_id: pattern_id.to_string(),
+            name: name.to_string(),
+            category: "Transformational".to_string(),
+            embedding: vec![0.1; 256],
             activation_count: 5,
             connection_id: Some("conn123".to_string()),
             created_timestamp_ms: 1000,
-            last_accessed_timestamp_ms: 2000,
+            last_used_timestamp_ms: 2000,
+            composition_history: vec![],
         }
     }
 
@@ -182,21 +184,21 @@ mod tests {
         let creator = SnapshotCreator::new(&snapshot_path).unwrap();
 
         // Create test data
-        let mut wells = HashMap::new();
-        wells.insert(MemoryId(1), create_test_well(MemoryId(1), "memory 1"));
-        wells.insert(MemoryId(2), create_test_well(MemoryId(2), "memory 2"));
-        wells.insert(MemoryId(3), create_test_well(MemoryId(3), "memory 3"));
+        let mut patterns = HashMap::new();
+        patterns.insert("p1".to_string(), create_test_pattern("p1", "Pattern 1"));
+        patterns.insert("p2".to_string(), create_test_pattern("p2", "Pattern 2"));
+        patterns.insert("p3".to_string(), create_test_pattern("p3", "Pattern 3"));
 
         // Create snapshot
-        creator.create_snapshot(&wells).unwrap();
+        creator.create_snapshot(&patterns).unwrap();
 
         // Load snapshot
         let loaded = creator.load_snapshot().unwrap();
 
         assert_eq!(loaded.len(), 3);
-        assert_eq!(loaded.get(&MemoryId(1)).unwrap().content, "memory 1");
-        assert_eq!(loaded.get(&MemoryId(2)).unwrap().content, "memory 2");
-        assert_eq!(loaded.get(&MemoryId(3)).unwrap().content, "memory 3");
+        assert_eq!(loaded.get("p1").unwrap().name, "Pattern 1");
+        assert_eq!(loaded.get("p2").unwrap().name, "Pattern 2");
+        assert_eq!(loaded.get("p3").unwrap().name, "Pattern 3");
     }
 
     #[test]
@@ -210,13 +212,13 @@ mod tests {
         assert!(creator.get_metadata().unwrap().is_none());
 
         // Create snapshot
-        let mut wells = HashMap::new();
-        wells.insert(MemoryId(1), create_test_well(MemoryId(1), "test"));
-        creator.create_snapshot(&wells).unwrap();
+        let mut patterns = HashMap::new();
+        patterns.insert("p1".to_string(), create_test_pattern("p1", "Test"));
+        creator.create_snapshot(&patterns).unwrap();
 
         // Check metadata
         let metadata = creator.get_metadata().unwrap().unwrap();
-        assert_eq!(metadata.well_count, 1);
+        assert_eq!(metadata.pattern_count, 1);
         assert_eq!(metadata.format_version, 1);
     }
 
@@ -228,20 +230,20 @@ mod tests {
         let creator = SnapshotCreator::new(&snapshot_path).unwrap();
 
         // Create first snapshot
-        let mut wells1 = HashMap::new();
-        wells1.insert(MemoryId(1), create_test_well(MemoryId(1), "old"));
-        creator.create_snapshot(&wells1).unwrap();
+        let mut patterns1 = HashMap::new();
+        patterns1.insert("p1".to_string(), create_test_pattern("p1", "Old"));
+        creator.create_snapshot(&patterns1).unwrap();
 
         // Create second snapshot (should overwrite)
-        let mut wells2 = HashMap::new();
-        wells2.insert(MemoryId(2), create_test_well(MemoryId(2), "new"));
-        creator.create_snapshot(&wells2).unwrap();
+        let mut patterns2 = HashMap::new();
+        patterns2.insert("p2".to_string(), create_test_pattern("p2", "New"));
+        creator.create_snapshot(&patterns2).unwrap();
 
         // Load should have only new data
         let loaded = creator.load_snapshot().unwrap();
         assert_eq!(loaded.len(), 1);
-        assert!(loaded.contains_key(&MemoryId(2)));
-        assert!(!loaded.contains_key(&MemoryId(1)));
+        assert!(loaded.contains_key("p2"));
+        assert!(!loaded.contains_key("p1"));
     }
 
     #[test]
@@ -253,8 +255,8 @@ mod tests {
         let creator = SnapshotCreator::new(&snapshot_path).unwrap();
 
         // Create empty snapshot
-        let wells = HashMap::new();
-        creator.create_snapshot(&wells).unwrap();
+        let patterns = HashMap::new();
+        creator.create_snapshot(&patterns).unwrap();
 
         // Load should be empty
         let loaded = creator.load_snapshot().unwrap();
