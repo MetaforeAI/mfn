@@ -16,12 +16,14 @@ This directory contains comprehensive architectural documentation for the Memory
 
 ## Architecture Overview
 
-The Memory Flow Network implements a revolutionary 4-layer memory architecture:
+The Memory Flow Network implements a revolutionary 5-layer memory architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    Memory Flow Network (MFN)                           │
 ├─────────────────────────────────────────────────────────────────────────┤
+│ Layer 5: Pattern Structure Registry (PSR) - Rust                      │
+│          ↓ Pattern template storage, composition, similarity search    │
 │ Layer 4: Context Prediction Engine (CPE) - Rust                       │
 │          ↓ Temporal pattern analysis, sequence prediction              │
 │ Layer 3: Associative Link Mesh (ALM) - Go                             │
@@ -75,10 +77,11 @@ The Memory Flow Network implements a revolutionary 4-layer memory architecture:
 - **Persistence System**: SQLite-based durable storage with state snapshots
 
 ### Processing Layers
-- **Layer 1 (IFR)**: Bloom filters, perfect hashing, comptime optimization
-- **Layer 2 (DSR)**: Spiking neural networks, reservoir computing, similarity wells
-- **Layer 3 (ALM)**: Graph algorithms, concurrent search, associative memory
-- **Layer 4 (CPE)**: LSTM models, temporal patterns, context prediction
+- **Layer 1 (IFR)**: Bloom filters, perfect hashing, comptime optimization, AOF persistence
+- **Layer 2 (DSR)**: Spiking neural networks, reservoir computing, similarity wells, AOF + LMDB
+- **Layer 3 (ALM)**: Graph algorithms, concurrent search, associative memory, AOF + LMDB
+- **Layer 4 (CPE)**: N-gram analysis, temporal patterns, context prediction, AOF + LMDB
+- **Layer 5 (PSR)**: Pattern templates, cosine similarity, Hadamard composition, AOF + LMDB
 
 ## Documentation Structure
 
