@@ -45,11 +45,22 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Memory stress test executable
+    const memory_stress_test_exe = b.addExecutable(.{
+        .name = "ifr_memory_stress_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/memory_stress_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
     // Install executables
     b.installArtifact(test_exe);
     b.installArtifact(benchmark_exe);
     b.installArtifact(socket_server_exe);
     b.installArtifact(socket_client_test_exe);
+    b.installArtifact(memory_stress_test_exe);
 
     // Install C header file
     const header_install = b.addInstallFile(b.path("include/mfn_layer1_ifr.h"), "include/mfn_layer1_ifr.h");
@@ -60,6 +71,7 @@ pub fn build(b: *std.Build) void {
     const run_benchmark = b.addRunArtifact(benchmark_exe);
     const run_socket_server = b.addRunArtifact(socket_server_exe);
     const run_socket_client_test = b.addRunArtifact(socket_client_test_exe);
+    const run_memory_stress_test = b.addRunArtifact(memory_stress_test_exe);
 
     const test_step = b.step("test", "Run Layer 1 tests");
     test_step.dependOn(&run_test.step);
@@ -72,4 +84,7 @@ pub fn build(b: *std.Build) void {
 
     const client_test_step = b.step("client-test", "Run Layer 1 socket client tests");
     client_test_step.dependOn(&run_socket_client_test.step);
+
+    const memory_stress_step = b.step("memory-stress", "Run memory stress tests");
+    memory_stress_step.dependOn(&run_memory_stress_test.step);
 }

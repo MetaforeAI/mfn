@@ -205,6 +205,7 @@ pub const HashEntry = struct {
     key: []const u8,
     value: []const u8,
     occupied: bool,
+    last_access_time: i64, // For LRU tracking
 };
 
 pub const PerfectHashTable = struct {
@@ -212,24 +213,33 @@ pub const PerfectHashTable = struct {
     size: u64,
     count: u64,
     load_factor: f32,
-    
+    max_entries: u64, // Maximum allowed entries
+    allocator: Allocator, // Need to track allocator for memory management
+
     const Self = @This();
-    
+
     pub fn init(allocator: Allocator, initial_size: u64, load_factor: f32) !Self {
+        return initWithLimit(allocator, initial_size, load_factor, 0); // 0 = no limit
+    }
+
+    pub fn initWithLimit(allocator: Allocator, initial_size: u64, load_factor: f32, max_entries: u64) !Self {
         const entries = try allocator.alloc(HashEntry, initial_size);
         for (entries) |*entry| {
             entry.* = HashEntry{
                 .key = "",
                 .value = "",
                 .occupied = false,
+                .last_access_time = 0,
             };
         }
-        
+
         return Self{
             .entries = entries,
             .size = initial_size,
             .count = 0,
             .load_factor = load_factor,
+            .max_entries = max_entries,
+            .allocator = allocator,
         };
     }
     
@@ -238,36 +248,121 @@ pub const PerfectHashTable = struct {
     }
     
     pub fn put(self: *Self, allocator: Allocator, key: []const u8, value: []const u8) !void {
-        // Resize if load factor exceeded
-        if (@as(f32, @floatFromInt(self.count)) >= @as(f32, @floatFromInt(self.size)) * self.load_factor) {
-            try self.resize(allocator);
+        _ = try self.putWithEviction(allocator, key, value);
+    }
+
+    pub const PutResult = struct {
+        evicted: bool,
+        evicted_key: ?[]const u8,
+    };
+
+    pub fn putWithEviction(self: *Self, allocator: Allocator, key: []const u8, value: []const u8) !PutResult {
+        var result = PutResult{ .evicted = false, .evicted_key = null };
+
+        // Check if we need to evict before adding
+        if (self.max_entries > 0 and self.count >= self.max_entries) {
+            // Find and evict the least recently used entry
+            const evicted_key = try self.evictLRU(allocator);
+            if (evicted_key) |k| {
+                result.evicted = true;
+                result.evicted_key = k;
+            }
         }
-        
+
+        // Resize if load factor exceeded (but respect max size)
+        if (@as(f32, @floatFromInt(self.count)) >= @as(f32, @floatFromInt(self.size)) * self.load_factor) {
+            // Only resize if we haven't hit max entries limit, or if max_entries is 0 (unlimited)
+            if (self.max_entries == 0 or self.size * 2 <= self.max_entries * 2) { // Allow some headroom
+                try self.resize(allocator);
+            }
+        }
+
         const index = self.probe(key);
-        
-        if (!self.entries[index].occupied) {
+
+        // Free old value if updating existing key
+        if (self.entries[index].occupied and std.mem.eql(u8, self.entries[index].key, key)) {
+            allocator.free(self.entries[index].value);
+        } else if (!self.entries[index].occupied) {
             self.count += 1;
         }
-        
+
         // Store copies of key and value
         const key_copy = try allocator.dupe(u8, key);
         const value_copy = try allocator.dupe(u8, value);
-        
+
         self.entries[index] = HashEntry{
             .key = key_copy,
             .value = value_copy,
             .occupied = true,
+            .last_access_time = std.time.timestamp(),
         };
+
+        return result;
+    }
+
+    fn evictLRU(self: *Self, allocator: Allocator) !?[]const u8 {
+        var oldest_time: i64 = std.time.timestamp();
+        var oldest_index: ?usize = null;
+
+        // Find the least recently used entry
+        for (self.entries, 0..) |entry, i| {
+            if (entry.occupied and entry.last_access_time < oldest_time) {
+                oldest_time = entry.last_access_time;
+                oldest_index = i;
+            }
+        }
+
+        if (oldest_index) |index| {
+            const evicted_key = try allocator.dupe(u8, self.entries[index].key);
+
+            // Free the old entry's memory
+            allocator.free(self.entries[index].key);
+            allocator.free(self.entries[index].value);
+
+            // Mark as unoccupied
+            self.entries[index] = HashEntry{
+                .key = "",
+                .value = "",
+                .occupied = false,
+                .last_access_time = 0,
+            };
+            self.count -= 1;
+
+            return evicted_key;
+        }
+
+        return null;
     }
     
     pub fn get(self: *Self, key: []const u8) ?[]const u8 {
         const index = self.probe(key);
-        
+
         if (self.entries[index].occupied and std.mem.eql(u8, self.entries[index].key, key)) {
+            // Update access time for LRU tracking
+            self.entries[index].last_access_time = std.time.timestamp();
             return self.entries[index].value;
         }
-        
+
         return null;
+    }
+
+    pub fn remove(self: *Self, allocator: Allocator, key: []const u8) !void {
+        const index = self.probe(key);
+
+        if (self.entries[index].occupied and std.mem.eql(u8, self.entries[index].key, key)) {
+            // Free the memory
+            allocator.free(self.entries[index].key);
+            allocator.free(self.entries[index].value);
+
+            // Mark as unoccupied
+            self.entries[index] = HashEntry{
+                .key = "",
+                .value = "",
+                .occupied = false,
+                .last_access_time = 0,
+            };
+            self.count -= 1;
+        }
     }
     
     pub fn contains(self: *Self, key: []const u8) bool {
@@ -298,21 +393,27 @@ pub const PerfectHashTable = struct {
     fn resize(self: *Self, allocator: Allocator) !void {
         const old_entries = self.entries;
         const old_size = self.size;
-        
-        // Double the size
-        self.size = old_size * 2;
+
+        // Double the size (but check max_entries limit)
+        var new_size = old_size * 2;
+        if (self.max_entries > 0 and new_size > self.max_entries * 2) {
+            new_size = self.max_entries * 2; // Cap at 2x max_entries for probe headroom
+        }
+
+        self.size = new_size;
         self.entries = try allocator.alloc(HashEntry, self.size);
         self.count = 0;
-        
+
         // Initialize new entries
         for (self.entries) |*entry| {
             entry.* = HashEntry{
                 .key = "",
                 .value = "",
                 .occupied = false,
+                .last_access_time = 0,
             };
         }
-        
+
         // Rehash all existing entries
         for (old_entries) |entry| {
             if (entry.occupied) {
@@ -320,10 +421,10 @@ pub const PerfectHashTable = struct {
                 if (!self.entries[index].occupied) {
                     self.count += 1;
                 }
-                self.entries[index] = entry; // Move the entry directly
+                self.entries[index] = entry; // Move the entry directly (preserves access time)
             }
         }
-        
+
         // Free old entries array (keys and values are moved, not copied)
         allocator.free(old_entries);
     }
@@ -362,23 +463,32 @@ pub const ImmediateFlowRegistry = struct {
     bloom_filter: BloomFilter,
     hash_table: PerfectHashTable,
     allocator: Allocator,
-    
+
     // Statistics
     query_count: u64,
     exact_hits: u64,
     bloom_hits: u64,
     bloom_false_positives: u64,
-    
+    total_evictions: u64,
+
     const Self = @This();
-    
-    pub fn init(allocator: Allocator, 
-                bloom_capacity: u64, 
+
+    pub fn init(allocator: Allocator,
+                bloom_capacity: u64,
                 bloom_error_rate: f64,
                 hash_initial_size: u64) !Self {
-        
+        return initWithLimit(allocator, bloom_capacity, bloom_error_rate, hash_initial_size, 0);
+    }
+
+    pub fn initWithLimit(allocator: Allocator,
+                         bloom_capacity: u64,
+                         bloom_error_rate: f64,
+                         hash_initial_size: u64,
+                         max_entries: u64) !Self {
+
         const bloom_filter = try BloomFilter.init(allocator, bloom_capacity, bloom_error_rate);
-        const hash_table = try PerfectHashTable.init(allocator, hash_initial_size, 0.7);
-        
+        const hash_table = try PerfectHashTable.initWithLimit(allocator, hash_initial_size, 0.7, max_entries);
+
         return Self{
             .bloom_filter = bloom_filter,
             .hash_table = hash_table,
@@ -387,6 +497,7 @@ pub const ImmediateFlowRegistry = struct {
             .exact_hits = 0,
             .bloom_hits = 0,
             .bloom_false_positives = 0,
+            .total_evictions = 0,
         };
     }
     
@@ -396,15 +507,42 @@ pub const ImmediateFlowRegistry = struct {
     }
     
     pub fn addMemory(self: *Self, content: []const u8, memory_data: []const u8) !MemoryID {
+        const result = try self.addMemoryWithEviction(content, memory_data);
+        return result.memory_id;
+    }
+
+    pub const AddMemoryResult = struct {
+        memory_id: MemoryID,
+        evicted: bool,
+    };
+
+    pub fn addMemoryWithEviction(self: *Self, content: []const u8, memory_data: []const u8) !AddMemoryResult {
         const hash_key = hash_fn_1(content);
-        
+
         // Add to bloom filter
         self.bloom_filter.add(content);
-        
-        // Add to hash table
-        try self.hash_table.put(self.allocator, content, memory_data);
-        
-        return MemoryID{ .hash = hash_key };
+
+        // Add to hash table with eviction handling
+        const put_result = try self.hash_table.putWithEviction(self.allocator, content, memory_data);
+
+        if (put_result.evicted) {
+            self.total_evictions += 1;
+            // Note: We can't remove from bloom filter, but that's okay - false positives are acceptable
+        }
+
+        return AddMemoryResult{
+            .memory_id = MemoryID{ .hash = hash_key },
+            .evicted = put_result.evicted,
+        };
+    }
+
+    pub fn removeMemory(self: *Self, key: []const u8) !void {
+        try self.hash_table.remove(self.allocator, key);
+        // Note: We can't remove from bloom filter, but that's okay
+    }
+
+    pub fn getMemoryCount(self: *Self) u64 {
+        return self.hash_table.count;
     }
     
     pub fn query(self: *Self, content: []const u8) RoutingDecision {
@@ -465,15 +603,17 @@ pub const ImmediateFlowRegistry = struct {
         bloom_false_positives: u64,
         false_positive_rate: f32,
         memory_count: u64,
+        total_evictions: u64,
+        max_entries: u64,
     } {
-        const hit_rate = if (self.query_count > 0) 
-            @as(f32, @floatFromInt(self.exact_hits)) / @as(f32, @floatFromInt(self.query_count)) 
+        const hit_rate = if (self.query_count > 0)
+            @as(f32, @floatFromInt(self.exact_hits)) / @as(f32, @floatFromInt(self.query_count))
             else 0.0;
-            
+
         const false_positive_rate = if (self.bloom_hits > 0)
             @as(f32, @floatFromInt(self.bloom_false_positives)) / @as(f32, @floatFromInt(self.bloom_hits))
             else 0.0;
-        
+
         return .{
             .total_queries = self.query_count,
             .exact_hits = self.exact_hits,
@@ -482,6 +622,8 @@ pub const ImmediateFlowRegistry = struct {
             .bloom_false_positives = self.bloom_false_positives,
             .false_positive_rate = false_positive_rate,
             .memory_count = self.hash_table.count,
+            .total_evictions = self.total_evictions,
+            .max_entries = self.hash_table.max_entries,
         };
     }
     

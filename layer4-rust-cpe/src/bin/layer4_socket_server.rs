@@ -14,7 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 use std::sync::Arc;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig};
+use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig, ConnectionId};
 use mfn_core::{UniversalSearchQuery, MemoryId, current_timestamp, MfnLayer, RoutingDecision};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,10 @@ async fn handle_connection(
     server_start_time: std::time::Instant,
 ) -> Result<()> {
     use tokio::io::AsyncReadExt;
+
+    // Generate unique connection ID
+    let conn_id = format!("conn_{}", uuid::Uuid::new_v4());
+    eprintln!("New connection: {}", conn_id);
 
     let (mut read_half, mut write_half) = stream.into_split();
 
@@ -109,9 +113,9 @@ async fn handle_connection(
 
         // Handle different request types
         let response = match request.request_type.as_str() {
-            "AddMemoryContext" => handle_add_memory_context(&layer, &request).await,
-            "PredictContext" => handle_predict_context(&layer, &request).await,
-            "GetContextHistory" => handle_get_context_history(&layer, &request).await,
+            "AddMemoryContext" => handle_add_memory_context(&layer, &request, &conn_id).await,
+            "PredictContext" => handle_predict_context(&layer, &request, &conn_id).await,
+            "GetContextHistory" => handle_get_context_history(&layer, &request, &conn_id).await,
             "Ping" => handle_ping(&request).await,
             "HealthCheck" => handle_health_check(&layer, &request, server_start_time).await,
             _ => ContextResponse {
@@ -133,12 +137,17 @@ async fn handle_connection(
         write_half.write_all(response_bytes).await?;
     }
 
+    // Connection closed - clean up resources
+    eprintln!("Connection closed: {} - cleaning up resources", conn_id);
+    layer.cleanup_connection(&conn_id).await;
+
     Ok(())
 }
 
 async fn handle_add_memory_context(
     layer: &Arc<ContextPredictionLayer>,
-    request: &ContextRequest
+    request: &ContextRequest,
+    conn_id: &str
 ) -> ContextResponse {
     // Extract memory_id and context from payload
     let memory_id = request.payload.get("memory_id")
@@ -156,9 +165,15 @@ async fn handle_add_memory_context(
             .map(|s| s.to_string())
             .collect::<Vec<String>>())
         .unwrap_or_default();
-    
-    // Add memory access to temporal analyzer
-    // This would be done through the layer's internal API
+
+    // Add memory access to temporal analyzer with connection tracking
+    layer.add_memory_access_with_connection(
+        memory_id as u64,
+        content,
+        &context,
+        Some(conn_id.to_string())
+    ).await;
+
     ContextResponse {
         response_type: "AddMemoryContext_Response".to_string(),
         request_id: request.request_id.clone(),
@@ -167,14 +182,16 @@ async fn handle_add_memory_context(
             "memory_id": memory_id,
             "content": content,
             "context_added": context.len(),
-            "timestamp": current_timestamp()
+            "timestamp": current_timestamp(),
+            "connection_id": conn_id
         })
     }
 }
 
 async fn handle_predict_context(
     layer: &Arc<ContextPredictionLayer>,
-    request: &ContextRequest
+    request: &ContextRequest,
+    conn_id: &str
 ) -> ContextResponse {
     let current_context = request.payload.get("current_context")
         .and_then(|v| v.as_array())
@@ -234,8 +251,9 @@ async fn handle_predict_context(
 }
 
 async fn handle_get_context_history(
-    _layer: &Arc<ContextPredictionLayer>,
-    request: &ContextRequest
+    layer: &Arc<ContextPredictionLayer>,
+    request: &ContextRequest,
+    conn_id: &str
 ) -> ContextResponse {
     let memory_id = request.payload.get("memory_id")
         .and_then(|v| v.as_u64())
@@ -269,20 +287,20 @@ async fn handle_ping(request: &ContextRequest) -> ContextResponse {
 }
 
 async fn handle_health_check(
-    _layer: &Arc<ContextPredictionLayer>,
+    layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
     server_start_time: std::time::Instant,
 ) -> ContextResponse {
     let timestamp = current_timestamp();
     let uptime_seconds = server_start_time.elapsed().as_secs();
 
-    // TODO: Get actual metrics from the layer
-    // For now, return placeholder metrics
+    // Get memory stats from the layer
+    let memory_stats = layer.get_memory_stats().await;
+
+    // Get actual metrics from the layer
     let metrics = serde_json::json!({
-        "total_predictions": 0,
-        "cache_hit_rate": 0.0,
-        "avg_latency_us": 200,
-        "success_rate": 1.0,
+        "memory_stats": memory_stats,
+        "uptime_seconds": uptime_seconds,
     });
 
     ContextResponse {
@@ -295,7 +313,36 @@ async fn handle_health_check(
             "timestamp": timestamp,
             "uptime_seconds": uptime_seconds,
             "metrics": metrics,
+            "memory_info": memory_stats,
         })
+    }
+}
+
+// Helper UUID generation
+mod uuid {
+    use rand::Rng;
+
+    pub struct Uuid(String);
+
+    impl Uuid {
+        pub fn new_v4() -> Self {
+            let mut rng = rand::thread_rng();
+            let uuid = format!(
+                "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                rng.gen::<u32>(),
+                rng.gen::<u16>(),
+                rng.gen::<u16>() & 0x0fff | 0x4000,
+                rng.gen::<u16>() & 0x3fff | 0x8000,
+                rng.gen::<u64>() & 0xffffffffffff
+            );
+            Uuid(uuid)
+        }
+    }
+
+    impl std::fmt::Display for Uuid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
     }
 }
 

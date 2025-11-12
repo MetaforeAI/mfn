@@ -58,22 +58,25 @@ impl Default for ContextPredictionConfig {
 pub struct ContextPredictionLayer {
     /// Core configuration
     config: LayerConfig,
-    
+
+    /// CPE-specific configuration
+    cpe_config: ContextPredictionConfig,
+
     /// Temporal pattern analyzer
     analyzer: Arc<Mutex<TemporalAnalyzer>>,
-    
+
     /// Context window for recent accesses
     context_window: Arc<RwLock<VecDeque<CoreMemoryAccess>>>,
-    
+
     /// Performance metrics
     performance_metrics: Arc<RwLock<CPEPerformanceMetrics>>,
-    
+
     /// Layer health status
     health_status: Arc<RwLock<LayerHealth>>,
-    
+
     /// Prediction cache to avoid redundant computation
     prediction_cache: Arc<RwLock<HashMap<String, CachedPrediction>>>,
-    
+
     /// Session tracking for context awareness
     session_tracker: Arc<RwLock<SessionTracker>>,
     
@@ -168,6 +171,62 @@ impl Default for LearningParameters {
 }
 
 impl ContextPredictionLayer {
+    /// Add a memory access with connection tracking
+    pub async fn add_memory_access_with_connection(
+        &self,
+        memory_id: MemoryId,
+        _content: &str,
+        context: &[String],
+        connection_id: Option<String>,
+    ) {
+        let access = MemoryAccess {
+            memory_id,
+            timestamp: current_timestamp(),
+            access_type: AccessType::Read,
+            user_context: Some(context.join(" ")),
+            session_id: None,
+            confidence: 1.0,
+            connection_id: connection_id.map(|s| s.into()),
+        };
+
+        // Add to temporal analyzer
+        let mut analyzer = self.analyzer.lock().await;
+        analyzer.add_access(access.clone());
+
+        // Update context window
+        let mut window = self.context_window.write();
+        window.push_back(CoreMemoryAccess {
+            memory_id,
+            timestamp: access.timestamp,
+            access_type: CoreAccessType::Read,
+            context_metadata: HashMap::new(),
+        });
+
+        // Limit window size
+        while window.len() > self.cpe_config.max_window_size {
+            window.pop_front();
+        }
+
+        // Update performance metrics
+        let mut metrics = self.performance_metrics.write();
+        metrics.context_window_size = window.len();
+    }
+
+    /// Clean up connection resources
+    pub async fn cleanup_connection(&self, conn_id: &str) {
+        let mut analyzer = self.analyzer.lock().await;
+        analyzer.cleanup_connection(&conn_id.to_string());
+
+        // Log cleanup
+        eprintln!("CPE: Cleaned up resources for connection {}", conn_id);
+    }
+
+    /// Get memory statistics
+    pub async fn get_memory_stats(&self) -> String {
+        let analyzer = self.analyzer.lock().await;
+        analyzer.get_memory_stats()
+    }
+
     /// Create a new Context Prediction Layer with custom config
     pub async fn new(config: ContextPredictionConfig) -> LayerResult<Self> {
         let temporal_config = TemporalConfig {
@@ -209,6 +268,7 @@ impl ContextPredictionLayer {
 
         Ok(Self {
             config: layer_config,
+            cpe_config: config,
             analyzer,
             context_window: Arc::new(RwLock::new(VecDeque::new())),
             performance_metrics: Arc::new(RwLock::new(CPEPerformanceMetrics::default())),
@@ -240,6 +300,7 @@ impl ContextPredictionLayer {
 
         Self {
             config,
+            cpe_config: ContextPredictionConfig::default(),
             analyzer,
             context_window: Arc::new(RwLock::new(VecDeque::new())),
             performance_metrics: Arc::new(RwLock::new(CPEPerformanceMetrics::default())),
@@ -357,6 +418,7 @@ impl MfnLayer for ContextPredictionLayer {
             user_context: None,
             session_id: None,
             confidence: 1.0,
+            connection_id: None,
         };
 
         let mut analyzer = self.analyzer.lock().await;
@@ -394,6 +456,7 @@ impl MfnLayer for ContextPredictionLayer {
             user_context: None,
             session_id: None,
             confidence: 1.0,
+            connection_id: None,
         };
 
         let mut analyzer = self.analyzer.lock().await;
@@ -420,6 +483,7 @@ impl MfnLayer for ContextPredictionLayer {
                 user_context: None,
                 session_id: None,
                 confidence: 1.0,
+                connection_id: None,
             };
 
             let mut analyzer = self.analyzer.lock().await;
@@ -440,6 +504,7 @@ impl MfnLayer for ContextPredictionLayer {
             user_context: None,
             session_id: None,
             max_predictions: query.max_results,
+            connection_id: None,
         };
 
         let analyzer = self.analyzer.lock().await;
@@ -624,6 +689,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
             user_context: context.user_context.get("user_id").map(|v| v.to_string()),
             session_id: context.user_context.get("session_id").map(|v| v.to_string()),
             max_predictions: 10,
+            connection_id: None,
         };
 
         // Get predictions from temporal analyzer
@@ -681,6 +747,7 @@ impl ContextPredictionEngine for ContextPredictionLayer {
                 session_id: access.context_metadata.get("session_id")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
                 confidence: 1.0,
+                connection_id: None,
             };
 
             let mut analyzer = self.analyzer.lock().await;
@@ -724,6 +791,8 @@ impl ContextPredictionEngine for ContextPredictionLayer {
             session_id: access.context_metadata.get("session_id")
                 .and_then(|v| v.as_str().map(|s| s.to_string())),
             confidence: 1.0,
+            connection_id: access.context_metadata.get("connection_id")
+                .and_then(|v| v.as_str().map(|s| s.to_string().into())),
         };
 
         let mut analyzer = self.analyzer.lock().await;

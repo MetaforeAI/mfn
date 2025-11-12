@@ -15,6 +15,7 @@ members = [
     "mfn-binary-protocol",
     "mfn-monolith",
 ]
+exclude = ["lmdb-benchmark"]
 
 [dependencies]
 # MFN Core

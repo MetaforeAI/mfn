@@ -27,6 +27,7 @@ type Association struct {
 	CreatedAt    time.Time `json:"created_at"`
 	LastUsed     time.Time `json:"last_used"`
 	UsageCount   int64     `json:"usage_count"`
+	ConnectionID string    `json:"connection_id,omitempty"` // Track which connection owns this
 }
 
 // AssociationType defines different types of memory associations

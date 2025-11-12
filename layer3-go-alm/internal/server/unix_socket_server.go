@@ -222,6 +222,15 @@ func (s *UnixSocketServer) handleConnection(conn net.Conn, connID string) {
 		conn.Close()
 		s.connections.Delete(connID)
 		atomic.AddInt32(&s.connCount, -1)
+
+		// Clean up connection's graph data
+		if s.alm != nil && s.alm.GetGraph() != nil {
+			nodesRemoved, edgesRemoved := s.alm.GetGraph().CloseConnection(connID)
+			if nodesRemoved > 0 || edgesRemoved > 0 {
+				log.Printf("Connection %s cleanup: removed %d nodes, %d edges", connID, nodesRemoved, edgesRemoved)
+			}
+		}
+
 		s.wg.Done()
 	}()
 
@@ -271,7 +280,7 @@ func (s *UnixSocketServer) handleConnection(conn net.Conn, connID string) {
 
 		// Process request
 		atomic.AddUint64(&s.totalRequests, 1)
-		s.processRequestBinary(conn, &req)
+		s.processRequestBinary(conn, &req, connID)
 	}
 }
 
@@ -440,6 +449,7 @@ func (s *UnixSocketServer) handleAddAssociation(writer *bufio.Writer, req *Socke
 		Type:         "user_defined",
 		Weight:       strength,
 		Reason:       "Added via socket API",
+		ConnectionID: "", // No connection tracking for non-binary protocol
 	}
 
 	// Add association to ALM
@@ -569,7 +579,7 @@ func (s *UnixSocketServer) sendResponseBinary(conn net.Conn, resp *SocketRespons
 }
 
 // processRequestBinary handles individual requests using binary protocol
-func (s *UnixSocketServer) processRequestBinary(conn net.Conn, req *SocketRequest) {
+func (s *UnixSocketServer) processRequestBinary(conn net.Conn, req *SocketRequest, connID string) {
 	startTime := time.Now()
 
 	switch req.Type {
@@ -580,7 +590,7 @@ func (s *UnixSocketServer) processRequestBinary(conn net.Conn, req *SocketReques
 		s.handleAddMemoryBinary(conn, req, startTime)
 
 	case "add_association":
-		s.handleAddAssociationBinary(conn, req, startTime)
+		s.handleAddAssociationBinary(conn, req, startTime, connID)
 
 	case "get_stats":
 		s.handleGetStatsBinary(conn, req, startTime)
@@ -698,7 +708,7 @@ func (s *UnixSocketServer) handleAddMemoryBinary(conn net.Conn, req *SocketReque
 	s.sendResponseBinary(conn, &resp)
 }
 
-func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *SocketRequest, startTime time.Time, connID string) {
 	sourceID, sourceOk := req.Metadata["source_id"].(float64)
 	targetID, targetOk := req.Metadata["target_id"].(float64)
 
@@ -719,6 +729,7 @@ func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *Socket
 		Type:         "user_defined",
 		Weight:       strength,
 		Reason:       "Added via socket API",
+		ConnectionID: connID, // Track which connection owns this association
 	}
 
 	err := s.alm.AddAssociation(assoc)

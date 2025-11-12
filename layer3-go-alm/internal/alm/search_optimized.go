@@ -19,16 +19,17 @@ type OptimizedSearcher struct {
 	config        *config.ALMConfig
 	pool          *ObjectPool
 	cache         *MemoryCache
-	
+	goroutinePool *GoroutinePool  // Use shared goroutine pool
+
 	// Enhanced worker pools with priority scheduling
 	searchWorkers    *PriorityWorkerPool
 	traversalWorkers *PriorityWorkerPool
-	
+
 	// Performance optimizations
 	hotPathCache     sync.Map // Cache for frequently traversed paths
 	queryCache       sync.Map // Cache for query results
 	edgeIndex        sync.Map // Index of edges by weight for fast filtering
-	
+
 	// Statistics
 	cacheHits        int64
 	cacheMisses      int64
