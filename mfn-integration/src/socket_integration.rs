@@ -13,6 +13,10 @@ use uuid;
 
 use crate::socket_clients::{
     LayerConnectionPool,
+    Layer1Client,
+    Layer2Client,
+    Layer3Client,
+    Layer4Client,
     UniversalSearchQuery as SocketQuery,
     SearchType as SocketSearchType,
     LayerQueryResult as SocketQueryResult,
@@ -74,18 +78,31 @@ impl Default for LayerQueryResult {
 }
 
 /// Socket-based MFN system integration
+/// Each layer client is independently accessible without a global lock
 pub struct SocketMfnIntegration {
-    connection_pool: Arc<Mutex<LayerConnectionPool>>,
+    layer1: Option<Arc<Layer1Client>>,
+    layer2: Option<Arc<Layer2Client>>,
+    layer3: Option<Arc<Layer3Client>>,
+    layer4: Option<Arc<Layer4Client>>,
     routing_strategy: RoutingStrategy,
     performance_stats: Arc<Mutex<PerformanceStats>>,
 }
 
 impl SocketMfnIntegration {
     pub async fn new() -> Result<Self> {
+        // Initialize per-layer clients with independent Arc wrappers
+        // No global lock - each layer can be queried concurrently
         let pool = LayerConnectionPool::new().await?;
+
+        // Extract clients from pool and wrap in Arc for concurrent access
+        let (layer1, layer2, layer3, layer4) = pool.into_clients();
+
         Ok(Self {
-            connection_pool: Arc::new(Mutex::new(pool)),
-            routing_strategy: RoutingStrategy::Sequential,
+            layer1: layer1.map(Arc::new),
+            layer2: layer2.map(Arc::new),
+            layer3: layer3.map(Arc::new),
+            layer4: layer4.map(Arc::new),
+            routing_strategy: RoutingStrategy::Parallel,
             performance_stats: Arc::new(Mutex::new(PerformanceStats::default())),
         })
     }
@@ -96,48 +113,39 @@ impl SocketMfnIntegration {
     }
 
     /// Initialize and verify all layer connections
+    /// No-op with new architecture - clients initialized in new()
     pub async fn initialize_all_layers(&self) -> Result<()> {
-        info!("Initializing all MFN layers via Unix sockets...");
+        info!("Verifying MFN layer connections...");
 
-        let mut pool = self.connection_pool.lock().await;
-
-        // Try to connect to each layer
         let mut connected_layers = vec![];
 
-        // Layer 1 (Zig IFR)
-        match pool.get_layer1().await {
-            Ok(_) => {
-                info!("✅ Layer 1 (IFR) connected");
-                connected_layers.push(1);
-            },
-            Err(e) => warn!("⚠️ Layer 1 (IFR) not available: {}", e),
+        // Check each layer client
+        if self.layer1.is_some() {
+            info!("✅ Layer 1 (IFR) available");
+            connected_layers.push(1);
+        } else {
+            warn!("⚠️ Layer 1 (IFR) not available");
         }
 
-        // Layer 2 (Rust DSR)
-        match pool.get_layer2().await {
-            Ok(_) => {
-                info!("✅ Layer 2 (DSR) connected");
-                connected_layers.push(2);
-            },
-            Err(e) => warn!("⚠️ Layer 2 (DSR) not available: {}", e),
+        if self.layer2.is_some() {
+            info!("✅ Layer 2 (DSR) available");
+            connected_layers.push(2);
+        } else {
+            warn!("⚠️ Layer 2 (DSR) not available");
         }
 
-        // Layer 3 (Go ALM)
-        match pool.get_layer3().await {
-            Ok(_) => {
-                info!("✅ Layer 3 (ALM) connected");
-                connected_layers.push(3);
-            },
-            Err(e) => warn!("⚠️ Layer 3 (ALM) not available: {}", e),
+        if self.layer3.is_some() {
+            info!("✅ Layer 3 (ALM) available");
+            connected_layers.push(3);
+        } else {
+            warn!("⚠️ Layer 3 (ALM) not available");
         }
 
-        // Layer 4 (Rust CPE)
-        match pool.get_layer4().await {
-            Ok(_) => {
-                info!("✅ Layer 4 (CPE) connected");
-                connected_layers.push(4);
-            },
-            Err(e) => warn!("⚠️ Layer 4 (CPE) not available: {}", e),
+        if self.layer4.is_some() {
+            info!("✅ Layer 4 (CPE) available");
+            connected_layers.push(4);
+        } else {
+            warn!("⚠️ Layer 4 (CPE) not available");
         }
 
         if connected_layers.is_empty() {
@@ -150,21 +158,15 @@ impl SocketMfnIntegration {
 
     /// Add a memory to the MFN system
     pub async fn add_memory(&self, memory: UniversalMemory) -> Result<()> {
-        let mut pool = self.connection_pool.lock().await;
-
         // Try to add to Layer 1 (primary storage)
-        match pool.get_layer1().await {
-            Ok(layer1) => {
-                layer1.add_memory(&memory.content, memory.content.as_bytes()).await?;
-                debug!("Memory {} added to Layer 1", memory.id);
-            }
-            Err(e) => {
-                warn!("Failed to add memory to Layer 1: {}", e);
-                return Err(anyhow!("Layer 1 not available for memory storage"));
-            }
+        if let Some(layer1) = &self.layer1 {
+            layer1.add_memory(&memory.content, memory.content.as_bytes()).await?;
+            debug!("Memory {} added to Layer 1", memory.id);
+            Ok(())
+        } else {
+            warn!("Layer 1 not available for memory storage");
+            Err(anyhow!("Layer 1 not available for memory storage"))
         }
-
-        Ok(())
     }
 
     /// Search the MFN system (wrapper around query for compatibility)
@@ -198,14 +200,24 @@ impl SocketMfnIntegration {
         stats.total_time_ms += start_time.elapsed().as_millis() as f64;
         stats.success_rate = 1.0; // Update based on actual success/failure tracking
 
-        // Sort by confidence and merge
-        all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        // Use partial sort for efficient top-K selection (O(n log k) vs O(n log n))
+        // For small result sets, just do full sort
+        let k = query.max_results.min(all_results.len());
 
-        if all_results.len() > query.max_results {
-            all_results.truncate(query.max_results);
+        if all_results.len() <= k || all_results.len() < 20 {
+            // Full sort for small result sets
+            all_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+            all_results.truncate(k);
+            result.results = all_results;
+        } else {
+            // Partial sort using select_nth_unstable for large result sets
+            all_results.select_nth_unstable_by(k, |a, b| {
+                b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mut top_k = all_results.into_iter().take(k).collect::<Vec<_>>();
+            top_k.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+            result.results = top_k;
         }
-
-        result.results = all_results;
         result.total_time_ms = start_time.elapsed().as_millis() as f64;
 
         Ok(result)
@@ -213,13 +225,12 @@ impl SocketMfnIntegration {
 
     async fn query_sequential(&self, query: UniversalSearchQuery) -> Result<Vec<UniversalSearchResult>> {
         let mut all_results = Vec::new();
-        let mut pool = self.connection_pool.lock().await;
 
         // Convert to socket query format
         let socket_query = convert_to_socket_query(&query);
 
         // Layer 1: Exact match
-        if let Ok(layer1) = pool.get_layer1().await {
+        if let Some(layer1) = &self.layer1 {
             match layer1.query(&socket_query).await {
                 Ok(result) => {
                     debug!("Layer 1 returned {} results", result.results.len());
@@ -235,7 +246,7 @@ impl SocketMfnIntegration {
         }
 
         // Layer 2: Similarity search
-        if let Ok(layer2) = pool.get_layer2().await {
+        if let Some(layer2) = &self.layer2 {
             match layer2.query(&socket_query).await {
                 Ok(result) => {
                     debug!("Layer 2 returned {} results", result.results.len());
@@ -246,7 +257,7 @@ impl SocketMfnIntegration {
         }
 
         // Layer 3: Associative search
-        if let Ok(layer3) = pool.get_layer3().await {
+        if let Some(layer3) = &self.layer3 {
             match layer3.query(&socket_query).await {
                 Ok(result) => {
                     debug!("Layer 3 returned {} results", result.results.len());
@@ -257,7 +268,7 @@ impl SocketMfnIntegration {
         }
 
         // Layer 4: Context prediction
-        if let Ok(layer4) = pool.get_layer4().await {
+        if let Some(layer4) = &self.layer4 {
             match layer4.query(&socket_query).await {
                 Ok(result) => {
                     debug!("Layer 4 returned {} results", result.results.len());
@@ -279,15 +290,19 @@ impl SocketMfnIntegration {
         let query3 = query.clone();
         let query4 = query.clone();
 
-        // Get connection pool reference
-        let pool = Arc::clone(&self.connection_pool);
+        // Clone Arc references to each layer client for concurrent access
+        // NO GLOBAL LOCK - each layer accessed independently!
+        let layer1 = self.layer1.clone();
+        let layer2 = self.layer2.clone();
+        let layer3 = self.layer3.clone();
+        let layer4 = self.layer4.clone();
 
-        // Query all layers in parallel
+        // Query all layers in parallel - ZERO LOCK CONTENTION
         let (result1, result2, result3, result4) = tokio::join!(
-            Self::query_layer1_safe(pool.clone(), query1),
-            Self::query_layer2_safe(pool.clone(), query2),
-            Self::query_layer3_safe(pool.clone(), query3),
-            Self::query_layer4_safe(pool.clone(), query4),
+            Self::query_layer1_safe(layer1, query1),
+            Self::query_layer2_safe(layer2, query2),
+            Self::query_layer3_safe(layer3, query3),
+            Self::query_layer4_safe(layer4, query4),
         );
 
         // Check if all layers failed first (before moving results)
@@ -336,10 +351,9 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layer1_only(&self, query: UniversalSearchQuery) -> Result<Vec<UniversalSearchResult>> {
-        let mut pool = self.connection_pool.lock().await;
         let socket_query = convert_to_socket_query(&query);
 
-        if let Ok(layer1) = pool.get_layer1().await {
+        if let Some(layer1) = &self.layer1 {
             match layer1.query(&socket_query).await {
                 Ok(result) => Ok(convert_from_socket_results(result)),
                 Err(e) => {
@@ -353,12 +367,11 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layer2_focused(&self, query: UniversalSearchQuery) -> Result<Vec<UniversalSearchResult>> {
-        let mut pool = self.connection_pool.lock().await;
         let socket_query = convert_to_socket_query(&query);
         let mut all_results = Vec::new();
 
         // Primary: Layer 2
-        if let Ok(layer2) = pool.get_layer2().await {
+        if let Some(layer2) = &self.layer2 {
             match layer2.query(&socket_query).await {
                 Ok(result) => all_results.extend(convert_from_socket_results(result)),
                 Err(e) => warn!("Layer 2 query failed: {}", e),
@@ -366,7 +379,7 @@ impl SocketMfnIntegration {
         }
 
         // Secondary: Layer 3 for associations
-        if let Ok(layer3) = pool.get_layer3().await {
+        if let Some(layer3) = &self.layer3 {
             match layer3.query(&socket_query).await {
                 Ok(result) => all_results.extend(convert_from_socket_results(result)),
                 Err(e) => warn!("Layer 3 query failed: {}", e),
@@ -377,19 +390,18 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layers_2_and_3(&self, query: UniversalSearchQuery) -> Result<Vec<UniversalSearchResult>> {
-        let mut pool = self.connection_pool.lock().await;
         let socket_query = convert_to_socket_query(&query);
         let mut all_results = Vec::new();
 
         // Query both Layer 2 and Layer 3
-        if let Ok(layer2) = pool.get_layer2().await {
+        if let Some(layer2) = &self.layer2 {
             match layer2.query(&socket_query).await {
                 Ok(result) => all_results.extend(convert_from_socket_results(result)),
                 Err(e) => warn!("Layer 2 query failed: {}", e),
             }
         }
 
-        if let Ok(layer3) = pool.get_layer3().await {
+        if let Some(layer3) = &self.layer3 {
             match layer3.query(&socket_query).await {
                 Ok(result) => all_results.extend(convert_from_socket_results(result)),
                 Err(e) => warn!("Layer 3 query failed: {}", e),
@@ -417,11 +429,31 @@ impl SocketMfnIntegration {
     }
 
     pub async fn shutdown(self) -> Result<()> {
-        let pool = Arc::try_unwrap(self.connection_pool)
-            .map_err(|_| anyhow!("Failed to unwrap connection pool"))?
-            .into_inner();
+        // Shutdown each layer client individually
+        if let Some(layer1) = self.layer1 {
+            if let Ok(client) = Arc::try_unwrap(layer1) {
+                client.shutdown()?;
+            }
+        }
 
-        pool.shutdown()?;
+        if let Some(layer2) = self.layer2 {
+            if let Ok(client) = Arc::try_unwrap(layer2) {
+                client.shutdown()?;
+            }
+        }
+
+        if let Some(layer3) = self.layer3 {
+            if let Ok(client) = Arc::try_unwrap(layer3) {
+                client.shutdown()?;
+            }
+        }
+
+        if let Some(layer4) = self.layer4 {
+            if let Ok(client) = Arc::try_unwrap(layer4) {
+                client.shutdown()?;
+            }
+        }
+
         info!("MFN socket integration shut down successfully");
         Ok(())
     }
@@ -430,12 +462,12 @@ impl SocketMfnIntegration {
 
     /// Query Layer 1 with timeout and error handling
     async fn query_layer1_safe(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer1: Option<Arc<Layer1Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
         let timeout_dur = Duration::from_micros(query.timeout_us);
 
-        match tokio::time::timeout(timeout_dur, Self::query_layer1_impl(pool, query)).await {
+        match tokio::time::timeout(timeout_dur, Self::query_layer1_impl(layer1, query)).await {
             Ok(Ok(results)) => Ok(results),
             Ok(Err(e)) => {
                 warn!("Layer 1 query failed: {}", e);
@@ -449,28 +481,26 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layer1_impl(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer1: Option<Arc<Layer1Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
-        let socket_query = convert_to_socket_query(&query);
-
-        // Hold the lock while querying
-        let mut pool = pool.lock().await;
-        let layer1 = pool.get_layer1().await?;
-        let result = layer1.query(&socket_query).await?;
-        drop(pool); // Explicitly drop the lock
-
-        Ok(convert_from_socket_results(result))
+        if let Some(client) = layer1 {
+            let socket_query = convert_to_socket_query(&query);
+            let result = client.query(&socket_query).await?;
+            Ok(convert_from_socket_results(result))
+        } else {
+            Ok(vec![])
+        }
     }
 
     /// Query Layer 2 with timeout and error handling
     async fn query_layer2_safe(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer2: Option<Arc<Layer2Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
         let timeout_dur = Duration::from_micros(query.timeout_us);
 
-        match tokio::time::timeout(timeout_dur, Self::query_layer2_impl(pool, query)).await {
+        match tokio::time::timeout(timeout_dur, Self::query_layer2_impl(layer2, query)).await {
             Ok(Ok(results)) => Ok(results),
             Ok(Err(e)) => {
                 warn!("Layer 2 query failed: {}", e);
@@ -484,28 +514,26 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layer2_impl(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer2: Option<Arc<Layer2Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
-        let socket_query = convert_to_socket_query(&query);
-
-        // Hold the lock while querying
-        let mut pool = pool.lock().await;
-        let layer2 = pool.get_layer2().await?;
-        let result = layer2.query(&socket_query).await?;
-        drop(pool);
-
-        Ok(convert_from_socket_results(result))
+        if let Some(client) = layer2 {
+            let socket_query = convert_to_socket_query(&query);
+            let result = client.query(&socket_query).await?;
+            Ok(convert_from_socket_results(result))
+        } else {
+            Ok(vec![])
+        }
     }
 
     /// Query Layer 3 with timeout and error handling
     async fn query_layer3_safe(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer3: Option<Arc<Layer3Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
         let timeout_dur = Duration::from_micros(query.timeout_us);
 
-        match tokio::time::timeout(timeout_dur, Self::query_layer3_impl(pool, query)).await {
+        match tokio::time::timeout(timeout_dur, Self::query_layer3_impl(layer3, query)).await {
             Ok(Ok(results)) => Ok(results),
             Ok(Err(e)) => {
                 warn!("Layer 3 query failed: {}", e);
@@ -519,28 +547,26 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layer3_impl(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer3: Option<Arc<Layer3Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
-        let socket_query = convert_to_socket_query(&query);
-
-        // Hold the lock while querying
-        let mut pool = pool.lock().await;
-        let layer3 = pool.get_layer3().await?;
-        let result = layer3.query(&socket_query).await?;
-        drop(pool);
-
-        Ok(convert_from_socket_results(result))
+        if let Some(client) = layer3 {
+            let socket_query = convert_to_socket_query(&query);
+            let result = client.query(&socket_query).await?;
+            Ok(convert_from_socket_results(result))
+        } else {
+            Ok(vec![])
+        }
     }
 
     /// Query Layer 4 with timeout and error handling
     async fn query_layer4_safe(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer4: Option<Arc<Layer4Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
         let timeout_dur = Duration::from_micros(query.timeout_us);
 
-        match tokio::time::timeout(timeout_dur, Self::query_layer4_impl(pool, query)).await {
+        match tokio::time::timeout(timeout_dur, Self::query_layer4_impl(layer4, query)).await {
             Ok(Ok(results)) => Ok(results),
             Ok(Err(e)) => {
                 warn!("Layer 4 query failed: {}", e);
@@ -554,18 +580,16 @@ impl SocketMfnIntegration {
     }
 
     async fn query_layer4_impl(
-        pool: Arc<Mutex<LayerConnectionPool>>,
+        layer4: Option<Arc<Layer4Client>>,
         query: UniversalSearchQuery,
     ) -> Result<Vec<UniversalSearchResult>> {
-        let socket_query = convert_to_socket_query(&query);
-
-        // Hold the lock while querying
-        let mut pool = pool.lock().await;
-        let layer4 = pool.get_layer4().await?;
-        let result = layer4.query(&socket_query).await?;
-        drop(pool);
-
-        Ok(convert_from_socket_results(result))
+        if let Some(client) = layer4 {
+            let socket_query = convert_to_socket_query(&query);
+            let result = client.query(&socket_query).await?;
+            Ok(convert_from_socket_results(result))
+        } else {
+            Ok(vec![])
+        }
     }
 }
 

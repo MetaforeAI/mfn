@@ -195,16 +195,51 @@ async fn stress_test_search(config: StressConfig) -> Result<StressResults> {
 
     let system = create_mfn_system().await?;
 
-    // Pre-populate with memories
+    // Pre-populate with memories in parallel batches
+    // Use smaller batch size to avoid overwhelming socket backlog (default 128)
     println!("Populating {} memories...", config.memory_count);
-    for i in 0..config.memory_count {
-        let memory = UniversalMemory::new(
-            i as u64,
-            format!("Test Memory {}", i),
-        );
-        system.add_memory(memory).await?;
+    let batch_size = 20; // Reduced from 100 to prevent socket exhaustion
+    let mut populated = 0;
+    for batch_start in (0..config.memory_count).step_by(batch_size) {
+        let batch_end = (batch_start + batch_size).min(config.memory_count);
+        let mut handles = vec![];
+
+        for i in batch_start..batch_end {
+            let sys = system.clone();
+            let handle = tokio::spawn(async move {
+                let memory = UniversalMemory::new(i as u64, format!("Test Memory {}", i));
+                sys.add_memory(memory).await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for batch to complete
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(_)) => populated += 1,
+                Ok(Err(e)) => {
+                    eprintln!("⚠️  Memory addition failed: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Task panicked: {}", e);
+                }
+            }
+        }
+
+        // Progress indicator
+        if (batch_start / batch_size) % 5 == 0 {
+            print!(".");
+            use std::io::{self, Write};
+            io::stdout().flush().unwrap();
+        }
     }
-    println!("Population complete. Starting search stress test...");
+    println!(" done! Populated {}/{} memories", populated, config.memory_count);
+
+    if populated == 0 {
+        return Err(anyhow::anyhow!("Failed to populate any memories - layer servers may not be running"));
+    }
+
+    println!("Starting search stress test...");
 
     let success_count = Arc::new(AtomicU64::new(0));
     let fail_count = Arc::new(AtomicU64::new(0));
@@ -301,14 +336,42 @@ async fn stress_test_mixed_workload(config: StressConfig) -> Result<StressResult
 
     let system = create_mfn_system().await?;
 
-    // Pre-populate
+    // Pre-populate in parallel batches
+    // Use smaller batch size to avoid overwhelming socket backlog
     println!("Populating {} memories...", config.memory_count);
-    for i in 0..config.memory_count {
-        let memory = UniversalMemory::new(
-            i as u64,
-            format!("Test Memory {}", i),
-        );
-        system.add_memory(memory).await?;
+    let batch_size = 10; // Reduced to 10 for heavy load (1000 memories) to prevent buffer overflow
+    let mut populated = 0;
+    for batch_start in (0..config.memory_count).step_by(batch_size) {
+        let batch_end = (batch_start + batch_size).min(config.memory_count);
+        let mut handles = vec![];
+
+        for i in batch_start..batch_end {
+            let sys = system.clone();
+            let handle = tokio::spawn(async move {
+                let memory = UniversalMemory::new(i as u64, format!("Test Memory {}", i));
+                sys.add_memory(memory).await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for batch to complete
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(_)) => populated += 1,
+                Ok(Err(e)) => {
+                    eprintln!("⚠️  Memory addition failed: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Task panicked: {}", e);
+                }
+            }
+        }
+        print!(".");
+    }
+    println!(" done! Populated {}/{} memories", populated, config.memory_count);
+
+    if populated == 0 {
+        return Err(anyhow::anyhow!("Failed to populate any memories - layer servers may not be running"));
     }
 
     let success_count = Arc::new(AtomicU64::new(0));

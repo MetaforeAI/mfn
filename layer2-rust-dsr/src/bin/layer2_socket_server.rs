@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     // Create server configuration
     let config = SocketServerConfig {
         socket_path: "/tmp/mfn_layer2.sock".to_string(),
-        max_connections: 100,
+        max_connections: 200, // Increased for high-concurrency stress tests
         connection_timeout_ms: 30000,
         enable_binary_protocol: true,
         enable_json_protocol: true,

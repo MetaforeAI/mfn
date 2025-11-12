@@ -24,7 +24,7 @@ const MemoryID = ifr.MemoryID;
 // ============================================================================
 
 pub const DEFAULT_SOCKET_PATH = "/tmp/mfn_layer1.sock";
-pub const MAX_CONNECTIONS: u32 = 100;
+pub const MAX_CONNECTIONS: u32 = 200; // Increased for high-concurrency stress tests
 pub const CONNECTION_TIMEOUT_MS: u64 = 30000;
 pub const BUFFER_SIZE: usize = 8192;
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB max message
@@ -227,9 +227,12 @@ pub const SocketServer = struct {
             }
         };
         
-        // Create Unix socket listener
+        // Create Unix socket listener with increased backlog for stress testing
         const addr = try net.Address.initUnix(self.config.socket_path);
-        var listener = try addr.listen(.{ .reuse_address = true });
+        var listener = try addr.listen(.{
+            .reuse_address = true,
+            .kernel_backlog = 512, // Increased from default 128 for high-concurrency stress tests
+        });
         
         self.running = true;
         print("✅ Layer 1 IFR server listening on {s}\n", .{self.config.socket_path});
@@ -240,23 +243,39 @@ pub const SocketServer = struct {
             const connection = listener.accept() catch |err| {
                 if (err == error.WouldBlock) {
                     // No connection available, continue
-                    std.time.sleep(1000000); // 1ms sleep
+                    std.Thread.sleep(1000000); // 1ms sleep
                     continue;
                 }
                 print("Error accepting connection: {}\n", .{err});
                 continue;
             };
-            
+
+            // Check connection limit
+            if (self.active_connections >= self.config.max_connections) {
+                print("⚠️  Connection limit reached ({}/{}), closing new connection\n",
+                    .{self.active_connections, self.config.max_connections});
+                connection.stream.close();
+                continue;
+            }
+
             self.connection_counter += 1;
             self.total_connections += 1;
             self.active_connections += 1;
-            
-            // Handle connection (synchronous for now, can be made async)
-            self.handleConnection(connection.stream, self.connection_counter) catch |err| {
-                print("Error handling connection {}: {}\n", .{ self.connection_counter, err });
+
+            // Spawn thread to handle connection concurrently for high-load scenarios
+            const thread_result = std.Thread.spawn(.{}, handleConnectionThread, .{
+                self,
+                connection.stream,
+                self.connection_counter,
+            }) catch |err| {
+                print("Failed to spawn connection thread {}: {}\n", .{ self.connection_counter, err });
+                connection.stream.close();
+                self.active_connections -= 1;
+                continue;
             };
-            
-            self.active_connections -= 1;
+
+            // Detach thread - it will manage its own lifecycle
+            thread_result.detach();
         }
     }
     
@@ -264,15 +283,26 @@ pub const SocketServer = struct {
         self.running = false;
         print("🛑 Layer 1 IFR server stopping...\n", .{});
     }
-    
+
+    /// Thread wrapper for concurrent connection handling
+    fn handleConnectionThread(self: *Self, stream: net.Stream, connection_id: u32) void {
+        defer {
+            self.active_connections -= 1;
+        }
+
+        self.handleConnection(stream, connection_id) catch |err| {
+            print("Error handling connection {}: {}\n", .{ connection_id, err });
+        };
+    }
+
     fn handleConnection(self: *Self, stream: net.Stream, connection_id: u32) !void {
         defer stream.close();
         
         var conn = Connection.init(stream, connection_id);
         print("🔗 Connection {} established\n", .{connection_id});
         
-        var message_buffer = ArrayList(u8).init(self.allocator);
-        defer message_buffer.deinit();
+        var message_buffer = ArrayList(u8){};
+        defer message_buffer.deinit(self.allocator);
         
         // Connection handling loop
         while (true) {
@@ -281,11 +311,19 @@ pub const SocketServer = struct {
                 print("⏰ Connection {} timed out\n", .{connection_id});
                 break;
             }
-            
+
+            // Check if buffer is full
+            if (conn.write_index >= BUFFER_SIZE) {
+                print("❌ Connection {} buffer overflow: write_index={}, BUFFER_SIZE={}\n",
+                    .{ connection_id, conn.write_index, BUFFER_SIZE });
+                print("   This indicates a message larger than buffer size or a client not consuming data\n", .{});
+                break;
+            }
+
             // Try to read data
             const bytes_read = stream.read(conn.buffer[conn.write_index..]) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.time.sleep(1000000); // 1ms sleep
+                    std.Thread.sleep(1000000); // 1ms sleep
                     continue;
                 } else if (err == error.EndOfStream) {
                     print("🔌 Connection {} closed by client\n", .{connection_id});
@@ -295,15 +333,15 @@ pub const SocketServer = struct {
                     break;
                 }
             };
-            
+
             if (bytes_read == 0) {
                 print("🔌 Connection {} closed (0 bytes read)\n", .{connection_id});
                 break;
             }
-            
+
             conn.write_index += bytes_read;
             conn.updateActivity();
-            
+
             // Try to process complete messages
             while (try self.processMessage(&conn, &message_buffer)) {
                 // Continue processing messages
@@ -396,10 +434,18 @@ pub const SocketServer = struct {
         
         // Process JSON message
         try self.handleJsonMessage(conn, json_data);
-        
+
         // Update read index (skip the newline)
         conn.read_index += message_end + 1;
-        
+
+        // Compact buffer if needed (same as binary message processing)
+        if (conn.read_index > BUFFER_SIZE / 2) {
+            const remaining = conn.write_index - conn.read_index;
+            @memcpy(conn.buffer[0..remaining], conn.buffer[conn.read_index..conn.write_index]);
+            conn.read_index = 0;
+            conn.write_index = remaining;
+        }
+
         return true;
     }
     
@@ -623,27 +669,27 @@ pub const SocketServer = struct {
     
     fn sendBinaryQueryResponse(self: *Self, conn: *Connection, request_id: u32, result: RoutingDecision) !void {
         // Binary response format: found_exact(1) + next_layer(1) + confidence(4) + processing_time(8) + result_len(4) + result
-        var response_buffer = ArrayList(u8).init(self.allocator);
-        defer response_buffer.deinit();
+        var response_buffer = ArrayList(u8){};
+        defer response_buffer.deinit(self.allocator);
         
-        try response_buffer.append(if (result.found_exact) 1 else 0);
-        try response_buffer.append(result.next_layer orelse 0xFF);
+        try response_buffer.append(self.allocator, if (result.found_exact) 1 else 0);
+        try response_buffer.append(self.allocator, result.next_layer orelse 0xFF);
         
         const confidence_bytes = std.mem.asBytes(&result.confidence);
-        try response_buffer.appendSlice(confidence_bytes);
+        try response_buffer.appendSlice(self.allocator, confidence_bytes);
         
         const time_bytes = std.mem.asBytes(&result.processing_time_ns);
-        try response_buffer.appendSlice(time_bytes);
+        try response_buffer.appendSlice(self.allocator, time_bytes);
         
         if (result.result) |result_data| {
             const result_len: u32 = @intCast(result_data.len);
             const len_bytes = std.mem.asBytes(&result_len);
-            try response_buffer.appendSlice(len_bytes);
-            try response_buffer.appendSlice(result_data);
+            try response_buffer.appendSlice(self.allocator, len_bytes);
+            try response_buffer.appendSlice(self.allocator, result_data);
         } else {
             const zero_len: u32 = 0;
             const len_bytes = std.mem.asBytes(&zero_len);
-            try response_buffer.appendSlice(len_bytes);
+            try response_buffer.appendSlice(self.allocator, len_bytes);
         }
         
         try self.sendBinaryResponse(conn, request_id, response_buffer.items);
@@ -651,20 +697,20 @@ pub const SocketServer = struct {
     }
     
     fn sendBinaryStatsResponse(self: *Self, conn: *Connection, request_id: u32, stats: anytype) !void {
-        var response_buffer = ArrayList(u8).init(self.allocator);
-        defer response_buffer.deinit();
+        var response_buffer = ArrayList(u8){};
+        defer response_buffer.deinit(self.allocator);
         
         const total_queries_bytes = std.mem.asBytes(&stats.total_queries);
-        try response_buffer.appendSlice(total_queries_bytes);
+        try response_buffer.appendSlice(self.allocator, total_queries_bytes);
         
         const exact_hits_bytes = std.mem.asBytes(&stats.exact_hits);
-        try response_buffer.appendSlice(exact_hits_bytes);
+        try response_buffer.appendSlice(self.allocator, exact_hits_bytes);
         
         const hit_rate_bytes = std.mem.asBytes(&stats.hit_rate);
-        try response_buffer.appendSlice(hit_rate_bytes);
+        try response_buffer.appendSlice(self.allocator, hit_rate_bytes);
         
         const memory_count_bytes = std.mem.asBytes(&stats.memory_count);
-        try response_buffer.appendSlice(memory_count_bytes);
+        try response_buffer.appendSlice(self.allocator, memory_count_bytes);
         
         try self.sendBinaryResponse(conn, request_id, response_buffer.items);
         self.total_responses += 1;
