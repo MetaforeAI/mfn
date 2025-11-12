@@ -26,6 +26,7 @@ pub mod compression;
 pub mod ffi;
 pub mod socket_server;
 pub mod binary_protocol;
+pub mod persistence;
 
 // Re-exports for convenience
 pub use encoding::{SpikeEncoder, EncodingStrategy, SpikePattern};
@@ -34,6 +35,12 @@ pub use similarity::{SimilarityResults, SimilarityMatcher};
 pub use dynamics::{SpikeDynamics, TemporalWindow};
 pub use socket_server::{SocketServer, SocketServerConfig, SocketRequest, SocketResponse};
 pub use binary_protocol::{BinarySerializer, BinaryDeserializer, BinaryMessageType, BinaryMessageHeader};
+pub use persistence::{
+    PersistenceConfig,
+    AofWriter, AofEntry, AofEntryType, AofHandle,
+    SnapshotCreator, WellSnapshot,
+    RecoveryManager, RecoveryStats,
+};
 
 /// Core embedding type used throughout Layer 2
 pub type Embedding = Array1<f32>;

@@ -1,6 +1,12 @@
 /// Memory limit tests for Layer 4 CPE
 /// Validates that memory growth is properly bounded
-use layer4_cpe::{TemporalAnalyzer, TemporalConfig, MemoryAccess, AccessType, PredictionContext};
+use layer4_cpe::{
+    TemporalAnalyzer,
+    TemporalConfig,
+    MemoryAccess,
+    PredictionContext,
+};
+use layer4_cpe::temporal::AccessType;
 use mfn_core::current_timestamp;
 
 #[test]
@@ -20,7 +26,7 @@ fn test_ngram_limit_enforcement() {
     // Generate massive input to test bounded storage
     for i in 0..1_000_000 {
         let access = MemoryAccess {
-            memory_id: (i % 10000) as u32, // Cycle through 10k unique IDs
+            memory_id: (i % 10000) as u64, // Cycle through 10k unique IDs
             timestamp: current_timestamp() + i,
             access_type: AccessType::Read,
             user_context: Some(format!("context_{}", i % 100)),
@@ -68,7 +74,7 @@ fn test_frequency_threshold_filtering() {
     // Add low-frequency n-grams
     for i in 0..1000 {
         let access = MemoryAccess {
-            memory_id: i as u32, // Unique ID each time - low frequency
+            memory_id: i as u64, // Unique ID each time - low frequency
             timestamp: current_timestamp() + i,
             access_type: AccessType::Read,
             user_context: None,
@@ -83,7 +89,7 @@ fn test_frequency_threshold_filtering() {
     for _ in 0..10 {
         for j in 0..5 {
             let access = MemoryAccess {
-                memory_id: j as u32, // Same sequence repeated - high frequency
+                memory_id: j as u64, // Same sequence repeated - high frequency
                 timestamp: current_timestamp(),
                 access_type: AccessType::Read,
                 user_context: None,
@@ -122,7 +128,7 @@ fn test_pattern_lru_eviction() {
         // Create repeating pattern
         for j in 0..3 {
             let access = MemoryAccess {
-                memory_id: ((i * 3 + j) % 50000) as u32,
+                memory_id: ((i * 3 + j) % 50000) as u64,
                 timestamp: current_timestamp() + i * 1000 + j,
                 access_type: AccessType::Read,
                 user_context: None,
@@ -136,7 +142,7 @@ fn test_pattern_lru_eviction() {
         // Repeat pattern to register it
         for j in 0..3 {
             let access = MemoryAccess {
-                memory_id: ((i * 3 + j) % 50000) as u32,
+                memory_id: ((i * 3 + j) % 50000) as u64,
                 timestamp: current_timestamp() + i * 1000 + 100 + j,
                 access_type: AccessType::Read,
                 user_context: None,
@@ -166,7 +172,7 @@ fn test_connection_cleanup() {
     // Add accesses for specific connection
     for i in 0..100 {
         let access = MemoryAccess {
-            memory_id: i as u32,
+            memory_id: i as u64,
             timestamp: current_timestamp() + i,
             access_type: AccessType::Read,
             user_context: Some("test".to_string()),
@@ -201,7 +207,7 @@ fn test_memory_stats_reporting() {
     // Add some data
     for i in 0..1000 {
         let access = MemoryAccess {
-            memory_id: (i % 100) as u32,
+            memory_id: (i % 100) as u64,
             timestamp: current_timestamp() + i,
             access_type: AccessType::Read,
             user_context: None,
@@ -232,7 +238,7 @@ fn test_sustained_load_memory_stability() {
     for iteration in 0..100 {
         for i in 0..10000 {
             let access = MemoryAccess {
-                memory_id: (i % 1000) as u32,
+                memory_id: (i % 1000) as u64,
                 timestamp: current_timestamp() + (iteration * 10000 + i) as u64,
                 access_type: AccessType::Read,
                 user_context: Some(format!("ctx_{}", i % 50)),
