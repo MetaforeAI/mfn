@@ -51,6 +51,7 @@ pub mod temporal;
 pub mod prediction;
 pub mod error;
 pub mod persistence;
+pub mod pool_manager;
 
 // Re-export main types
 pub use prediction::{
@@ -78,6 +79,8 @@ pub use persistence::{
     SnapshotCreator, WellSnapshot,
     RecoveryManager, RecoveryStats,
 };
+
+pub use pool_manager::PoolManager;
 
 // Re-export core MFN types for convenience
 pub use mfn_core::{

@@ -12,9 +12,11 @@ use mfn_core::memory_types::Timestamp;
 use mfn_core::layer_interface::AccessType as CoreAccessType;
 
 use crate::temporal::{
-    TemporalAnalyzer, TemporalConfig, MemoryAccess, AccessType, PredictionContext, 
+    TemporalAnalyzer, TemporalConfig, MemoryAccess, AccessType, PredictionContext,
     PredictionResult, PredictionType, AnalyzerStatistics,
 };
+
+use crate::persistence;
 
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
@@ -79,9 +81,14 @@ pub struct ContextPredictionLayer {
 
     /// Session tracking for context awareness
     session_tracker: Arc<RwLock<SessionTracker>>,
-    
+
     /// Learning rate and adaptation parameters
     learning_params: LearningParameters,
+
+    // Persistence (optional)
+    aof_handle: Option<persistence::AofHandle>,
+    snapshot_creator: Option<Arc<persistence::SnapshotCreator>>,
+    snapshot_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Performance metrics specific to CPE
@@ -175,10 +182,11 @@ impl ContextPredictionLayer {
     pub async fn add_memory_access_with_connection(
         &self,
         memory_id: MemoryId,
-        _content: &str,
+        content: &str,
         context: &[String],
         connection_id: Option<String>,
     ) {
+        let connection_id_clone = connection_id.clone();
         let access = MemoryAccess {
             memory_id,
             timestamp: current_timestamp(),
@@ -186,12 +194,18 @@ impl ContextPredictionLayer {
             user_context: Some(context.join(" ")),
             session_id: None,
             confidence: 1.0,
-            connection_id: connection_id.map(|s| s.into()),
+            connection_id: connection_id_clone.map(|s| s.into()),
         };
 
         // Add to temporal analyzer
         let mut analyzer = self.analyzer.lock().await;
         analyzer.add_access(access.clone());
+        drop(analyzer);
+
+        // Log to AOF (non-blocking, minimal overhead)
+        if let Some(ref aof) = self.aof_handle {
+            let _ = aof.log_add_memory(memory_id, content.to_string(), connection_id);
+        }
 
         // Update context window
         let mut window = self.context_window.write();
@@ -229,6 +243,14 @@ impl ContextPredictionLayer {
 
     /// Create a new Context Prediction Layer with custom config
     pub async fn new(config: ContextPredictionConfig) -> LayerResult<Self> {
+        Self::new_with_persistence(config, None).await
+    }
+
+    /// Create a new Context Prediction Layer with optional persistence
+    pub async fn new_with_persistence(
+        config: ContextPredictionConfig,
+        persistence_config: Option<persistence::PersistenceConfig>,
+    ) -> LayerResult<Self> {
         let temporal_config = TemporalConfig {
             max_window_size: config.max_window_size,
             min_pattern_occurrences: config.min_frequency_threshold as u32,
@@ -266,6 +288,58 @@ impl ContextPredictionLayer {
             diagnostics: HashMap::new(),
         }));
 
+        // Optional persistence initialization
+        let (aof_handle, snapshot_creator, snapshot_task) = if let Some(pconfig) = persistence_config {
+            tracing::info!(
+                "Initializing persistence: data_dir={}, pool_id={}",
+                pconfig.data_dir.display(),
+                pconfig.pool_id
+            );
+
+            // Create AOF writer
+            let (handle, rx) = persistence::AofHandle::new();
+            let aof_path = pconfig.aof_path();
+            let mut aof_writer = persistence::AofWriter::new(
+                &aof_path,
+                rx,
+                pconfig.fsync_interval_ms,
+            ).map_err(|e| LayerError::InvalidOperation {
+                message: format!("AOF writer creation failed: {}", e),
+            })?;
+
+            // Start AOF background task
+            tokio::spawn(async move {
+                if let Err(e) = aof_writer.run().await {
+                    tracing::error!("AOF writer error: {}", e);
+                }
+            });
+
+            // Create snapshot creator
+            let snapshot_creator = Arc::new(
+                persistence::SnapshotCreator::new(pconfig.snapshot_path())
+                    .map_err(|e| LayerError::InvalidOperation {
+                        message: format!("Snapshot creator failed: {}", e),
+                    })?
+            );
+
+            // Start background snapshot task
+            let snapshot_task = Self::start_snapshot_task(
+                analyzer.clone(),
+                snapshot_creator.clone(),
+                pconfig.snapshot_interval_secs,
+            );
+
+            tracing::info!(
+                "Persistence enabled: AOF={}, snapshots every {}s",
+                aof_path.display(),
+                pconfig.snapshot_interval_secs
+            );
+
+            (Some(handle), Some(snapshot_creator), Some(snapshot_task))
+        } else {
+            (None, None, None)
+        };
+
         Ok(Self {
             config: layer_config,
             cpe_config: config,
@@ -276,6 +350,9 @@ impl ContextPredictionLayer {
             prediction_cache: Arc::new(RwLock::new(HashMap::new())),
             learning_params: LearningParameters::default(),
             session_tracker: Arc::new(RwLock::new(SessionTracker::default())),
+            aof_handle,
+            snapshot_creator,
+            snapshot_task,
         })
     }
 
@@ -308,6 +385,9 @@ impl ContextPredictionLayer {
             prediction_cache: Arc::new(RwLock::new(HashMap::new())),
             session_tracker: Arc::new(RwLock::new(SessionTracker::default())),
             learning_params: LearningParameters::default(),
+            aof_handle: None,
+            snapshot_creator: None,
+            snapshot_task: None,
         }
     }
 
@@ -388,10 +468,49 @@ impl ContextPredictionLayer {
     async fn cleanup_cache(&self) {
         let mut cache = self.prediction_cache.write();
         let current_time = current_timestamp();
-        
+
         cache.retain(|_, cached| {
             current_time.saturating_sub(cached.timestamp) < cached.ttl_us
         });
+    }
+
+    /// Start background task for periodic snapshots
+    fn start_snapshot_task(
+        analyzer: Arc<Mutex<TemporalAnalyzer>>,
+        snapshot_creator: Arc<persistence::SnapshotCreator>,
+        interval_secs: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        use std::collections::HashMap;
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                tokio::time::Duration::from_secs(interval_secs)
+            );
+
+            loop {
+                interval.tick().await;
+
+                // Create snapshot from current analyzer state
+                // For CPE, we'll snapshot temporal patterns as WellSnapshots
+                let snapshot_data: HashMap<MemoryId, persistence::WellSnapshot> = {
+                    let analyzer = analyzer.lock().await;
+                    let stats = analyzer.get_statistics();
+
+                    // For now, create empty snapshot (placeholder for temporal pattern serialization)
+                    // TODO: Add temporal pattern serialization to TemporalAnalyzer
+                    HashMap::new()
+                };
+
+                match snapshot_creator.create_snapshot(&snapshot_data) {
+                    Ok(_) => {
+                        tracing::info!("CPE snapshot created: {} patterns", snapshot_data.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create CPE snapshot: {}", e);
+                    }
+                }
+            }
+        })
     }
 }
 

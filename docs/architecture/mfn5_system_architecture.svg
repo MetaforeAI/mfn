@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1600" height="2600" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <!-- Layer gradients -->
+    <linearGradient id="layer1Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#357ABD;stop-opacity:0.9"/>
+    </linearGradient>
+
+    <linearGradient id="layer2Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#7B68EE;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#6347D1;stop-opacity:0.9"/>
+    </linearGradient>
+
+    <linearGradient id="layer3Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#50C878;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#3FA562;stop-opacity:0.9"/>
+    </linearGradient>
+
+    <linearGradient id="layer4Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B6B;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#CC5555;stop-opacity:0.9"/>
+    </linearGradient>
+
+    <linearGradient id="layer5Gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFB347;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#FF9933;stop-opacity:0.9"/>
+    </linearGradient>
+
+    <linearGradient id="orchestratorGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#9370DB;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#7B5AB8;stop-opacity:0.9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Title -->
+  <text x="800" y="60" font-family="Arial, sans-serif" font-size="42" font-weight="bold" text-anchor="middle" fill="#2C3E50">
+    Memory Flow Network (MFN) - 5-Layer Architecture
+  </text>
+
+  <!-- Subtitle -->
+  <text x="800" y="100" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" fill="#7F8C8D">
+    High-Performance Multi-Layer Memory System with Crash-Safe Persistence
+  </text>
+
+  <!-- Orchestrator -->
+  <rect x="200" y="150" width="1200" height="140" rx="15" fill="url(#orchestratorGradient)" stroke="#2C3E50" stroke-width="3"/>
+  <text x="800" y="190" font-family="Arial, sans-serif" font-size="28" font-weight="bold" text-anchor="middle" fill="white">
+    MFN Orchestrator
+  </text>
+  <text x="800" y="225" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="white">
+    • Adaptive Routing (Sequential, Parallel, Multi-Layer)
+  </text>
+  <text x="800" y="250" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="white">
+    • Query Analysis &amp; Performance Monitoring
+  </text>
+  <text x="800" y="275" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="white">
+    • Result Aggregation &amp; Caching
+  </text>
+
+  <!-- Arrow from orchestrator -->
+  <line x1="800" y1="290" x2="800" y2="350" stroke="#2C3E50" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+  <!-- Layer 5: PSR -->
+  <rect x="200" y="350" width="1200" height="180" rx="12" fill="url(#layer5Gradient)" stroke="#2C3E50" stroke-width="3"/>
+  <text x="220" y="390" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
+    Layer 5: Pattern Structure Registry (PSR)
+  </text>
+  <text x="220" y="420" font-family="Arial, sans-serif" font-size="16" fill="white">
+    • Language: Rust • Socket: /tmp/mfn_layer5.sock
+  </text>
+  <text x="220" y="445" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Pattern template storage (256-dim embeddings)
+  </text>
+  <text x="220" y="468" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Cosine similarity search (linear scan, HNSW pending)
+  </text>
+  <text x="220" y="491" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Pattern composition via Hadamard product
+  </text>
+  <text x="220" y="514" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Persistence: AOF + LMDB snapshots • 39 tests passing
+  </text>
+
+  <!-- Arrow -->
+  <line x1="800" y1="530" x2="800" y2="590" stroke="#2C3E50" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+  <!-- Layer 4: CPE -->
+  <rect x="200" y="590" width="1200" height="180" rx="12" fill="url(#layer4Gradient)" stroke="#2C3E50" stroke-width="3"/>
+  <text x="220" y="630" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
+    Layer 4: Context Prediction Engine (CPE)
+  </text>
+  <text x="220" y="660" font-family="Arial, sans-serif" font-size="16" fill="white">
+    • Language: Rust • Socket: /tmp/mfn_layer4.sock
+  </text>
+  <text x="220" y="685" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → N-gram frequency analysis (1-5 grams)
+  </text>
+  <text x="220" y="708" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Markov chain transition probabilities
+  </text>
+  <text x="220" y="731" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Statistical temporal modeling
+  </text>
+  <text x="220" y="754" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Persistence: AOF + LMDB snapshots • Pattern cache
+  </text>
+
+  <!-- Arrow -->
+  <line x1="800" y1="770" x2="800" y2="830" stroke="#2C3E50" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+  <!-- Layer 3: ALM -->
+  <rect x="200" y="830" width="1200" height="180" rx="12" fill="url(#layer3Gradient)" stroke="#2C3E50" stroke-width="3"/>
+  <text x="220" y="870" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
+    Layer 3: Associative Link Matrix (ALM)
+  </text>
+  <text x="220" y="900" font-family="Arial, sans-serif" font-size="16" fill="white">
+    • Language: Go • Socket: /tmp/mfn_layer3.sock
+  </text>
+  <text x="220" y="925" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Graph-based relationship traversal
+  </text>
+  <text x="220" y="948" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → 9 association types (Causal, Temporal, Spatial, etc.)
+  </text>
+  <text x="220" y="971" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Concurrent depth-based search with goroutines
+  </text>
+  <text x="220" y="994" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Persistence: AOF + LMDB snapshots • Graph storage
+  </text>
+
+  <!-- Arrow -->
+  <line x1="800" y1="1010" x2="800" y2="1070" stroke="#2C3E50" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+  <!-- Layer 2: DSR -->
+  <rect x="200" y="1070" width="1200" height="180" rx="12" fill="url(#layer2Gradient)" stroke="#2C3E50" stroke-width="3"/>
+  <text x="220" y="1110" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
+    Layer 2: Dynamic Similarity Reservoir (DSR)
+  </text>
+  <text x="220" y="1140" font-family="Arial, sans-serif" font-size="16" fill="white">
+    • Language: Rust • Socket: /tmp/mfn_layer2.sock
+  </text>
+  <text x="220" y="1165" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Spiking neural networks with liquid state machines
+  </text>
+  <text x="220" y="1188" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Victor-Purpura spike distance for similarity
+  </text>
+  <text x="220" y="1211" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Hebbian learning for pattern formation
+  </text>
+  <text x="220" y="1234" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Persistence: AOF + LMDB snapshots • Similarity wells
+  </text>
+
+  <!-- Arrow -->
+  <line x1="800" y1="1250" x2="800" y2="1310" stroke="#2C3E50" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+  <!-- Layer 1: IFR -->
+  <rect x="200" y="1310" width="1200" height="180" rx="12" fill="url(#layer1Gradient)" stroke="#2C3E50" stroke-width="3"/>
+  <text x="220" y="1350" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
+    Layer 1: Immediate Facility Registry (IFR)
+  </text>
+  <text x="220" y="1380" font-family="Arial, sans-serif" font-size="16" fill="white">
+    • Language: Zig • Socket: /tmp/mfn_layer1.sock
+  </text>
+  <text x="220" y="1405" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Hash-based exact matching with bloom filters
+  </text>
+  <text x="220" y="1428" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Comptime optimization for microsecond lookups
+  </text>
+  <text x="220" y="1451" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Perfect hashing with minimal collisions
+  </text>
+  <text x="220" y="1474" font-family="Arial, sans-serif" font-size="15" fill="white">
+    → Persistence: AOF (Append-Only File) for crash recovery
+  </text>
+
+  <!-- Persistence Layer Box -->
+  <rect x="150" y="1550" width="1300" height="280" rx="15" fill="#ECF0F1" stroke="#2C3E50" stroke-width="3" stroke-dasharray="10,5"/>
+  <text x="800" y="1590" font-family="Arial, sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#2C3E50">
+    Unified Persistence Architecture
+  </text>
+
+  <!-- AOF Section -->
+  <rect x="200" y="1620" width="550" height="180" rx="10" fill="#3498DB" fill-opacity="0.2" stroke="#2980B9" stroke-width="2"/>
+  <text x="475" y="1655" font-family="Arial, sans-serif" font-size="20" font-weight="bold" text-anchor="middle" fill="#2C3E50">
+    AOF (Append-Only File)
+  </text>
+  <text x="220" y="1685" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Async write: 250ns overhead
+  </text>
+  <text x="220" y="1710" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Buffered I/O with periodic fsync
+  </text>
+  <text x="220" y="1735" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Text-based JSON for debuggability
+  </text>
+  <text x="220" y="1760" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Background tokio workers
+  </text>
+  <text x="220" y="1785" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Crash-safe with corruption handling
+  </text>
+
+  <!-- LMDB Section -->
+  <rect x="850" y="1620" width="550" height="180" rx="10" fill="#2ECC71" fill-opacity="0.2" stroke="#27AE60" stroke-width="2"/>
+  <text x="1125" y="1655" font-family="Arial, sans-serif" font-size="20" font-weight="bold" text-anchor="middle" fill="#2C3E50">
+    LMDB Snapshots
+  </text>
+  <text x="870" y="1685" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Periodic snapshots (5 min default)
+  </text>
+  <text x="870" y="1710" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Fast recovery: &lt;200ms
+  </text>
+  <text x="870" y="1735" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Memory-mapped B-tree storage
+  </text>
+  <text x="870" y="1760" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Metadata tracking
+  </text>
+  <text x="870" y="1785" font-family="Arial, sans-serif" font-size="14" fill="#2C3E50">
+    • Load snapshot + replay AOF
+  </text>
+
+  <!-- Performance Box -->
+  <rect x="150" y="1870" width="1300" height="200" rx="15" fill="#FFF9E6" stroke="#F39C12" stroke-width="3"/>
+  <text x="800" y="1910" font-family="Arial, sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#E67E22">
+    Performance Characteristics
+  </text>
+  <text x="800" y="1950" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    System Throughput: ~1,000 req/s • End-to-End Latency: 90-130µs
+  </text>
+  <text x="800" y="1980" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    Write Overhead: 250ns (async AOF) • Recovery Time: &lt;200ms (snapshot + AOF replay)
+  </text>
+  <text x="800" y="2010" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    Layer 1: ~0.5µs • Layer 2: ~30µs • Layer 3: ~130µs • Layer 4: ~100µs • Layer 5: &lt;5ms
+  </text>
+  <text x="800" y="2040" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    Tests: 39 passing (Layer 5) • All layers crash-safe with corruption handling
+  </text>
+
+  <!-- Key Features Box -->
+  <rect x="150" y="2110" width="1300" height="200" rx="15" fill="#E8F8F5" stroke="#16A085" stroke-width="3"/>
+  <text x="800" y="2150" font-family="Arial, sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#16A085">
+    Key Innovations
+  </text>
+  <text x="800" y="2185" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    ✓ Memory-as-Flow Paradigm • ✓ Neural-Graph Hybrid Architecture
+  </text>
+  <text x="800" y="2215" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    ✓ Language-Optimized Layers (Zig, Rust, Go) • ✓ Unix Socket IPC (&lt;1ms)
+  </text>
+  <text x="800" y="2245" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    ✓ Redis-style AOF + LMDB Persistence • ✓ Adaptive Routing Strategies
+  </text>
+  <text x="800" y="2275" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#2C3E50">
+    ✓ Pattern Composition (Hadamard) • ✓ Crash-Safe with Auto-Recovery
+  </text>
+
+  <!-- Footer -->
+  <text x="800" y="2550" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#7F8C8D">
+    NeoTec Digital • Memory Flow Network (MFN) • 5-Layer Architecture • 2025
+  </text>
+
+  <!-- Arrow marker definition -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#2C3E50"/>
+    </marker>
+  </defs>
+</svg>

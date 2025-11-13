@@ -27,6 +27,7 @@ pub mod ffi;
 pub mod socket_server;
 pub mod binary_protocol;
 pub mod persistence;
+pub mod pool_manager;
 
 // Re-exports for convenience
 pub use encoding::{SpikeEncoder, EncodingStrategy, SpikePattern};
@@ -41,6 +42,7 @@ pub use persistence::{
     SnapshotCreator, WellSnapshot,
     RecoveryManager, RecoveryStats,
 };
+pub use pool_manager::PoolManager;
 
 /// Core embedding type used throughout Layer 2
 pub type Embedding = Array1<f32>;
@@ -72,7 +74,7 @@ impl Default for DSRConfig {
     fn default() -> Self {
         Self {
             reservoir_size: 2000,
-            embedding_dim: 384, // Common sentence transformer dimension
+            embedding_dim: 512, // Match Crucible d_model dimension
             encoding_strategy: EncodingStrategy::RateCoding,
             similarity_threshold: 0.7,
             competition_strength: 0.9,
@@ -88,7 +90,12 @@ pub struct DynamicSimilarityReservoir {
     encoder: Arc<dyn SpikeEncoder>,
     reservoir: Arc<RwLock<SimilarityReservoir>>,
     matcher: Arc<SimilarityMatcher>,
-    
+
+    // Persistence (optional)
+    aof_handle: Option<persistence::AofHandle>,
+    snapshot_creator: Option<Arc<persistence::SnapshotCreator>>,
+    snapshot_task: Option<tokio::task::JoinHandle<()>>,
+
     // Performance metrics
     total_queries: std::sync::atomic::AtomicU64,
     total_additions: std::sync::atomic::AtomicU64,
@@ -98,17 +105,75 @@ pub struct DynamicSimilarityReservoir {
 impl DynamicSimilarityReservoir {
     /// Create a new Dynamic Similarity Reservoir with the given configuration
     pub fn new(config: DSRConfig) -> Result<Self> {
+        Self::new_with_persistence(config, None)
+    }
+
+    /// Create a new Dynamic Similarity Reservoir with optional persistence
+    pub fn new_with_persistence(
+        config: DSRConfig,
+        persistence_config: Option<PersistenceConfig>,
+    ) -> Result<Self> {
         let encoder = encoding::create_encoder(config.encoding_strategy, config.embedding_dim)?;
         let reservoir = Arc::new(RwLock::new(
             SimilarityReservoir::new(config.clone())?
         ));
         let matcher = Arc::new(SimilarityMatcher::new(config.clone()));
 
+        // Optional persistence initialization
+        let (aof_handle, snapshot_creator, snapshot_task) = if let Some(pconfig) = persistence_config {
+            tracing::info!(
+                "Initializing persistence: data_dir={}, pool_id={}",
+                pconfig.data_dir.display(),
+                pconfig.pool_id
+            );
+
+            // Create AOF writer
+            let (handle, rx) = persistence::AofHandle::new();
+            let aof_path = pconfig.aof_path();
+            let mut aof_writer = persistence::AofWriter::new(
+                &aof_path,
+                rx,
+                pconfig.fsync_interval_ms,
+            )?;
+
+            // Start AOF background task
+            tokio::spawn(async move {
+                if let Err(e) = aof_writer.run().await {
+                    tracing::error!("AOF writer error: {}", e);
+                }
+            });
+
+            // Create snapshot creator
+            let snapshot_creator = Arc::new(
+                persistence::SnapshotCreator::new(pconfig.snapshot_path())?
+            );
+
+            // Start background snapshot task
+            let snapshot_task = Self::start_snapshot_task(
+                reservoir.clone(),
+                snapshot_creator.clone(),
+                pconfig.snapshot_interval_secs,
+            );
+
+            tracing::info!(
+                "Persistence enabled: AOF={}, snapshots every {}s",
+                aof_path.display(),
+                pconfig.snapshot_interval_secs
+            );
+
+            (Some(handle), Some(snapshot_creator), Some(snapshot_task))
+        } else {
+            (None, None, None)
+        };
+
         Ok(Self {
             config,
             encoder,
             reservoir,
             matcher,
+            aof_handle,
+            snapshot_creator,
+            snapshot_task,
             total_queries: std::sync::atomic::AtomicU64::new(0),
             total_additions: std::sync::atomic::AtomicU64::new(0),
             cache_hits: std::sync::atomic::AtomicU64::new(0),
@@ -140,9 +205,14 @@ impl DynamicSimilarityReservoir {
             reservoir.create_similarity_well_with_connection(
                 memory_id,
                 spike_pattern,
-                content,
-                connection_id,
+                content.clone(),
+                connection_id.clone(),
             )?;
+        }
+
+        // Log to AOF (non-blocking, ~250ns overhead)
+        if let Some(ref aof) = self.aof_handle {
+            aof.log_add_memory(memory_id, content, connection_id)?;
         }
 
         // Update metrics
@@ -264,6 +334,79 @@ impl DynamicSimilarityReservoir {
                 rt.block_on(self.optimize_reservoir())
             }
         }
+    }
+
+    /// Start background task for periodic snapshots
+    fn start_snapshot_task(
+        reservoir: Arc<RwLock<SimilarityReservoir>>,
+        snapshot_creator: Arc<persistence::SnapshotCreator>,
+        interval_secs: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                tokio::time::Duration::from_secs(interval_secs)
+            );
+
+            loop {
+                interval.tick().await;
+
+                // Create snapshot from current reservoir state
+                let wells = {
+                    let reservoir = reservoir.read().await;
+                    reservoir.get_wells_for_snapshot()
+                };
+
+                match snapshot_creator.create_snapshot(&wells) {
+                    Ok(_) => {
+                        tracing::info!("Snapshot created: {} wells", wells.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create snapshot: {}", e);
+                    }
+                }
+            }
+        })
+    }
+
+    /// Recover DSR from persistence (snapshot + AOF replay)
+    pub async fn recover_from_persistence(
+        config: DSRConfig,
+        persistence_config: PersistenceConfig,
+    ) -> Result<Self> {
+        tracing::info!(
+            "Starting recovery from: {}",
+            persistence_config.data_dir.display()
+        );
+
+        // Create recovery manager
+        let recovery_manager = persistence::RecoveryManager::new(
+            persistence_config.snapshot_path()
+        )?;
+
+        // Recover wells from snapshot + AOF
+        let (wells, stats) = recovery_manager.recover(
+            persistence_config.aof_path()
+        )?;
+
+        tracing::info!(
+            "Recovery complete: {} wells, {} AOF entries replayed, {}ms",
+            wells.len(),
+            stats.aof_entries_replayed,
+            stats.recovery_time_ms
+        );
+
+        // Create DSR with persistence enabled
+        let dsr = Self::new_with_persistence(config, Some(persistence_config))?;
+
+        // Populate reservoir with recovered wells
+        {
+            let mut reservoir = dsr.reservoir.write().await;
+            reservoir.restore_from_snapshots(wells)?;
+        }
+
+        tracing::info!("DSR recovery complete and operational");
+
+        Ok(dsr)
     }
 }
 

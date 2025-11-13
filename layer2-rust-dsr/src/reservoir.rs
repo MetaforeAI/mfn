@@ -708,6 +708,78 @@ impl SimilarityReservoir {
     pub fn set_ttl(&mut self, ttl_seconds: u64) {
         self.ttl_seconds = ttl_seconds;
     }
+
+    /// Export wells for snapshot (persistence)
+    pub fn get_wells_for_snapshot(&self) -> std::collections::HashMap<MemoryId, crate::persistence::WellSnapshot> {
+        use std::collections::HashMap;
+        use crate::persistence::WellSnapshot;
+
+        self.similarity_wells
+            .iter()
+            .map(|(memory_id, well)| {
+                let now = std::time::SystemTime::now();
+                let created_ts = now
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64
+                    - (well.created_at.elapsed().as_millis() as u64);
+                let accessed_ts = now
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64
+                    - (well.last_accessed.elapsed().as_millis() as u64);
+
+                (
+                    *memory_id,
+                    WellSnapshot {
+                        memory_id: *memory_id,
+                        content: well.content.clone(),
+                        strength: well.strength,
+                        activation_count: well.activation_count,
+                        connection_id: well.connection_id.clone(),
+                        created_timestamp_ms: created_ts,
+                        last_accessed_timestamp_ms: accessed_ts,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Restore wells from snapshot (persistence recovery)
+    pub fn restore_from_snapshots(
+        &mut self,
+        snapshots: std::collections::HashMap<MemoryId, crate::persistence::WellSnapshot>,
+    ) -> anyhow::Result<()> {
+        use crate::encoding::SpikePattern;
+
+        for (memory_id, snapshot) in snapshots {
+            // Create a placeholder spike pattern (will be recomputed from embeddings if needed)
+            // For now, we restore with empty spike pattern
+            let spike_pattern = SpikePattern {
+                spike_times: vec![],
+                duration_ms: 10.0,
+                neuron_count: self.config.reservoir_size,
+            };
+
+            let well = SimilarityWell::new(
+                memory_id,
+                spike_pattern,
+                snapshot.content,
+                self.config.reservoir_size,
+                snapshot.connection_id,
+            );
+
+            // Restore statistics
+            let mut restored_well = well;
+            restored_well.strength = snapshot.strength;
+            restored_well.activation_count = snapshot.activation_count;
+
+            self.similarity_wells.insert(memory_id, restored_well);
+        }
+
+        tracing::info!("Restored {} wells from snapshots", self.similarity_wells.len());
+        Ok(())
+    }
 }
 
 /// Memory statistics for monitoring

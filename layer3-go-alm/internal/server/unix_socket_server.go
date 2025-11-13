@@ -30,9 +30,9 @@ const (
 
 // UnixSocketServer handles Unix domain socket connections for Layer 3
 type UnixSocketServer struct {
-	alm        *alm.ALM
-	socketPath string
-	listener   net.Listener
+	poolManager *alm.PoolManager
+	socketPath  string
+	listener    net.Listener
 
 	// Connection management
 	connections sync.Map
@@ -55,6 +55,7 @@ type UnixSocketServer struct {
 type SocketRequest struct {
 	Type          string                 `json:"type"`
 	RequestID     string                 `json:"request_id"`
+	PoolID        string                 `json:"pool_id,omitempty"`
 	Query         string                 `json:"query,omitempty"`
 	Content       string                 `json:"content,omitempty"`
 	Limit         int                    `json:"limit,omitempty"`
@@ -93,7 +94,7 @@ type SearchResult struct {
 }
 
 // NewUnixSocketServer creates a new Unix socket server
-func NewUnixSocketServer(almInstance *alm.ALM, socketPath string) *UnixSocketServer {
+func NewUnixSocketServer(poolManager *alm.PoolManager, socketPath string) *UnixSocketServer {
 	if socketPath == "" {
 		socketPath = DefaultSocketPath
 	}
@@ -101,12 +102,12 @@ func NewUnixSocketServer(almInstance *alm.ALM, socketPath string) *UnixSocketSer
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &UnixSocketServer{
-		alm:        almInstance,
-		socketPath: socketPath,
-		maxConns:   MaxConnections,
-		ctx:        ctx,
-		cancel:     cancel,
-		startTime:  time.Now(),
+		poolManager: poolManager,
+		socketPath:  socketPath,
+		maxConns:    MaxConnections,
+		ctx:         ctx,
+		cancel:      cancel,
+		startTime:   time.Now(),
 	}
 }
 
@@ -223,11 +224,16 @@ func (s *UnixSocketServer) handleConnection(conn net.Conn, connID string) {
 		s.connections.Delete(connID)
 		atomic.AddInt32(&s.connCount, -1)
 
-		// Clean up connection's graph data
-		if s.alm != nil && s.alm.GetGraph() != nil {
-			nodesRemoved, edgesRemoved := s.alm.GetGraph().CloseConnection(connID)
-			if nodesRemoved > 0 || edgesRemoved > 0 {
-				log.Printf("Connection %s cleanup: removed %d nodes, %d edges", connID, nodesRemoved, edgesRemoved)
+		// Clean up connection's graph data from all pools
+		poolIDs := s.poolManager.ListPools()
+		for _, poolID := range poolIDs {
+			if pool, exists := s.poolManager.GetPool(poolID); exists {
+				if pool.GetGraph() != nil {
+					nodesRemoved, edgesRemoved := pool.GetGraph().CloseConnection(connID)
+					if nodesRemoved > 0 || edgesRemoved > 0 {
+						log.Printf("Connection %s cleanup (pool %s): removed %d nodes, %d edges", connID, poolID, nodesRemoved, edgesRemoved)
+					}
+				}
 			}
 		}
 
@@ -284,6 +290,21 @@ func (s *UnixSocketServer) handleConnection(conn net.Conn, connID string) {
 	}
 }
 
+// getPoolFromRequest retrieves the appropriate pool for a request
+func (s *UnixSocketServer) getPoolFromRequest(req *SocketRequest) (*alm.ALM, error) {
+	poolID := req.PoolID
+	if poolID == "" {
+		poolID = "crucible_training" // Default pool for backwards compatibility
+	}
+
+	pool, err := s.poolManager.GetOrCreatePool(poolID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pool %s: %w", poolID, err)
+	}
+
+	return pool, nil
+}
+
 // processRequest handles individual requests
 func (s *UnixSocketServer) processRequest(writer *bufio.Writer, req *SocketRequest) {
 	startTime := time.Now()
@@ -311,6 +332,13 @@ func (s *UnixSocketServer) processRequest(writer *bufio.Writer, req *SocketReque
 
 // handleSearch processes search requests
 func (s *UnixSocketServer) handleSearch(writer *bufio.Writer, req *SocketRequest, startTime time.Time) {
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendError(writer, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	// Prepare search parameters
 	limit := req.Limit
 	if limit <= 0 {
@@ -328,7 +356,7 @@ func (s *UnixSocketServer) handleSearch(writer *bufio.Writer, req *SocketRequest
 	}
 
 	// Perform associative search with new API
-	results, err := s.alm.SearchAssociative(ctx, searchQuery)
+	results, err := pool.SearchAssociative(ctx, searchQuery)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Search failed: %v", err))
 		return
@@ -382,6 +410,13 @@ func convertMetadata(metadata map[string]string) map[string]interface{} {
 
 // handleAddMemory processes memory addition requests
 func (s *UnixSocketServer) handleAddMemory(writer *bufio.Writer, req *SocketRequest, startTime time.Time) {
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendError(writer, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	// Generate unique memory ID
 	memoryID := uint64(time.Now().UnixNano())
 
@@ -404,7 +439,7 @@ func (s *UnixSocketServer) handleAddMemory(writer *bufio.Writer, req *SocketRequ
 	}
 
 	// Add memory to ALM
-	err := s.alm.AddMemory(memory)
+	err = pool.AddMemory(memory)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Failed to add memory: %v", err))
 		return
@@ -427,6 +462,13 @@ func (s *UnixSocketServer) handleAddMemory(writer *bufio.Writer, req *SocketRequ
 
 // handleAddAssociation processes association addition requests
 func (s *UnixSocketServer) handleAddAssociation(writer *bufio.Writer, req *SocketRequest, startTime time.Time) {
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendError(writer, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	// Extract source and target IDs from metadata
 	sourceID, sourceOk := req.Metadata["source_id"].(float64)
 	targetID, targetOk := req.Metadata["target_id"].(float64)
@@ -453,7 +495,7 @@ func (s *UnixSocketServer) handleAddAssociation(writer *bufio.Writer, req *Socke
 	}
 
 	// Add association to ALM
-	err := s.alm.AddAssociation(assoc)
+	err = pool.AddAssociation(assoc)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Failed to add association: %v", err))
 		return
@@ -473,7 +515,14 @@ func (s *UnixSocketServer) handleAddAssociation(writer *bufio.Writer, req *Socke
 
 // handleGetStats processes statistics requests
 func (s *UnixSocketServer) handleGetStats(writer *bufio.Writer, req *SocketRequest, startTime time.Time) {
-	stats := s.alm.GetGraphStats()
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendError(writer, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
+	stats := pool.GetGraphStats()
 	processingTime := float32(time.Since(startTime).Milliseconds())
 
 	resp := SocketResponse{
@@ -482,6 +531,8 @@ func (s *UnixSocketServer) handleGetStats(writer *bufio.Writer, req *SocketReque
 		Success:          true,
 		ProcessingTimeMs: processingTime,
 		Metadata: map[string]interface{}{
+			"pool_id":            req.PoolID,
+			"total_pools":        s.poolManager.PoolCount(),
 			"total_memories":     stats.TotalMemories,
 			"total_associations": stats.TotalAssociations,
 			"total_queries":      atomic.LoadUint64(&s.totalRequests),
@@ -608,6 +659,13 @@ func (s *UnixSocketServer) processRequestBinary(conn net.Conn, req *SocketReques
 
 // Binary protocol versions of handlers
 func (s *UnixSocketServer) handleSearchBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	// Prepare search parameters
 	limit := req.Limit
 	if limit <= 0 {
@@ -625,7 +683,7 @@ func (s *UnixSocketServer) handleSearchBinary(conn net.Conn, req *SocketRequest,
 	}
 
 	// Perform associative search
-	results, err := s.alm.SearchAssociative(ctx, searchQuery)
+	results, err := pool.SearchAssociative(ctx, searchQuery)
 	if err != nil {
 		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Search failed: %v", err))
 		return
@@ -669,6 +727,13 @@ func (s *UnixSocketServer) handleSearchBinary(conn net.Conn, req *SocketRequest,
 }
 
 func (s *UnixSocketServer) handleAddMemoryBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	memoryID := uint64(time.Now().UnixNano())
 
 	metadataStr := make(map[string]string)
@@ -687,7 +752,7 @@ func (s *UnixSocketServer) handleAddMemoryBinary(conn net.Conn, req *SocketReque
 		Metadata: metadataStr,
 	}
 
-	err := s.alm.AddMemory(memory)
+	err = pool.AddMemory(memory)
 	if err != nil {
 		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Failed to add memory: %v", err))
 		return
@@ -709,6 +774,13 @@ func (s *UnixSocketServer) handleAddMemoryBinary(conn net.Conn, req *SocketReque
 }
 
 func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *SocketRequest, startTime time.Time, connID string) {
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	sourceID, sourceOk := req.Metadata["source_id"].(float64)
 	targetID, targetOk := req.Metadata["target_id"].(float64)
 
@@ -732,7 +804,7 @@ func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *Socket
 		ConnectionID: connID, // Track which connection owns this association
 	}
 
-	err := s.alm.AddAssociation(assoc)
+	err = pool.AddAssociation(assoc)
 	if err != nil {
 		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Failed to add association: %v", err))
 		return
@@ -751,7 +823,14 @@ func (s *UnixSocketServer) handleAddAssociationBinary(conn net.Conn, req *Socket
 }
 
 func (s *UnixSocketServer) handleGetStatsBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
-	stats := s.alm.GetGraphStats()
+	// Get the appropriate pool
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
+	stats := pool.GetGraphStats()
 	processingTime := float32(time.Since(startTime).Milliseconds())
 
 	resp := SocketResponse{
@@ -760,10 +839,12 @@ func (s *UnixSocketServer) handleGetStatsBinary(conn net.Conn, req *SocketReques
 		Success:          true,
 		ProcessingTimeMs: processingTime,
 		Metadata: map[string]interface{}{
+			"pool_id":            req.PoolID,
 			"total_memories":     stats.TotalMemories,
 			"total_associations": stats.TotalAssociations,
 			"total_queries":      atomic.LoadUint64(&s.totalRequests),
 			"active_connections": atomic.LoadInt32(&s.connCount),
+			"total_pools":        s.poolManager.PoolCount(),
 		},
 	}
 
@@ -789,8 +870,15 @@ func (s *UnixSocketServer) handlePingBinary(conn net.Conn, req *SocketRequest, s
 }
 
 func (s *UnixSocketServer) handleHealthCheckBinary(conn net.Conn, req *SocketRequest, startTime time.Time) {
+	// Get the appropriate pool (or default pool)
+	pool, err := s.getPoolFromRequest(req)
+	if err != nil {
+		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Pool error: %v", err))
+		return
+	}
+
 	// Get graph statistics
-	stats := s.alm.GetGraphStats()
+	stats := pool.GetGraphStats()
 
 	// Calculate uptime
 	uptimeSeconds := int64(time.Since(s.startTime).Seconds())
@@ -802,6 +890,8 @@ func (s *UnixSocketServer) handleHealthCheckBinary(conn net.Conn, req *SocketReq
 		Timestamp:     time.Now().UnixMilli(),
 		UptimeSeconds: uptimeSeconds,
 		Metrics: map[string]interface{}{
+			"pool_id":            req.PoolID,
+			"total_pools":        s.poolManager.PoolCount(),
 			"total_memories":     stats.TotalMemories,
 			"total_associations": stats.TotalAssociations,
 			"total_queries":      atomic.LoadUint64(&s.totalRequests),

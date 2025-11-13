@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/mfn/layer3_alm/internal/alm"
 	"github.com/mfn/layer3_alm/internal/config"
 	"github.com/mfn/layer3_alm/internal/ffi"
+	"github.com/mfn/layer3_alm/internal/persistence"
 	"github.com/mfn/layer3_alm/internal/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -24,33 +26,50 @@ import (
 func main() {
 	// Load configuration
 	cfg := config.DefaultConfig()
-	
+
 	log.Printf("🐹 MFN Layer 3 (ALM) Starting...")
 	log.Printf("Configuration: %+v", cfg)
 
-	// Initialize the Associative Link Mesh
-	almInstance, err := alm.NewALM(&cfg.ALMConfig)
-	if err != nil {
-		log.Fatalf("Failed to initialize ALM: %v", err)
+	// Create persistence config
+	persistConfig := persistence.DefaultConfig()
+	dataDir := persistConfig.DataDir
+
+	// Ensure data directory exists
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("Failed to create persistence directory: %v", err)
 	}
-	defer almInstance.Close()
+
+	log.Printf("💾 Persistence enabled: %s", dataDir)
+
+	// Initialize the PoolManager
+	poolManager := alm.NewPoolManager(dataDir, &cfg.ALMConfig)
+	defer poolManager.Close()
+
+	// Create default pool for backwards compatibility
+	defaultPool, err := poolManager.GetOrCreatePool("crucible_training")
+	if err != nil {
+		log.Fatalf("Failed to initialize default pool: %v", err)
+	}
+
+	log.Printf("📝 Default pool AOF: %s", filepath.Join(dataDir, "pool_crucible_training.aof"))
+	log.Printf("📸 Default pool snapshots: %s", filepath.Join(dataDir, "pool_crucible_training.snapshot"))
 
 	// Initialize FFI interface for inter-layer communication
-	ffiServer := ffi.NewFFIServer(almInstance)
+	ffiServer := ffi.NewFFIServer(defaultPool)
 	if err := ffiServer.Start(); err != nil {
 		log.Fatalf("Failed to start FFI server: %v", err)
 	}
 	defer ffiServer.Stop()
 
 	// Initialize Unix socket server for inter-layer communication
-	unixServer := server.NewUnixSocketServer(almInstance, "/tmp/mfn_layer3.sock")
+	unixServer := server.NewUnixSocketServer(poolManager, "/tmp/mfn_layer3.sock")
 	if err := unixServer.Start(); err != nil {
 		log.Fatalf("Failed to start Unix socket server: %v", err)
 	}
 	defer unixServer.Stop()
 
 	// Initialize optimized HTTP server for monitoring and API
-	httpServer := server.NewOptimizedServer(almInstance, &cfg.ServerConfig)
+	httpServer := server.NewOptimizedServer(defaultPool, &cfg.ServerConfig)
 
 	// Start metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())
@@ -72,7 +91,7 @@ func main() {
 	// Populate with test data for demonstration
 	if cfg.ALMConfig.PopulateTestData {
 		log.Println("Populating with test data...")
-		if err := populateTestData(almInstance); err != nil {
+		if err := populateTestData(defaultPool); err != nil {
 			log.Printf("Warning: Failed to populate test data: %v", err)
 		}
 	}

@@ -12,9 +12,10 @@ serde = { version = "1.0", features = ["derive"] }
 //! High-performance Unix socket server for Context Prediction Engine
 
 use std::sync::Arc;
+use std::path::PathBuf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig, ConnectionId};
+use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig, ConnectionId, PersistenceConfig, PoolManager};
 use mfn_core::{UniversalSearchQuery, MemoryId, current_timestamp, MfnLayer, RoutingDecision};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,14 @@ struct ContextRequest {
     #[serde(rename = "type")]
     request_type: String,
     request_id: String,
+    #[serde(default = "default_pool_id")]
+    pool_id: String,
     #[serde(flatten)]
     payload: serde_json::Value,
+}
+
+fn default_pool_id() -> String {
+    "crucible_training".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -41,7 +48,7 @@ struct ContextResponse {
 
 async fn handle_connection(
     stream: UnixStream,
-    layer: Arc<ContextPredictionLayer>,
+    pool_manager: Arc<PoolManager>,
     server_start_time: std::time::Instant,
 ) -> Result<()> {
     use tokio::io::AsyncReadExt;
@@ -111,13 +118,35 @@ async fn handle_connection(
             }
         };
 
+        // Get or create pool for this request
+        let layer = match pool_manager.get_or_create_pool(&request.pool_id).await {
+            Ok(pool) => pool,
+            Err(e) => {
+                let error_response = ContextResponse {
+                    response_type: "error".to_string(),
+                    request_id: request.request_id.clone(),
+                    success: false,
+                    data: serde_json::json!({
+                        "error": format!("Failed to get pool '{}': {}", request.pool_id, e)
+                    })
+                };
+                let response_json = serde_json::to_string(&error_response)?;
+                let response_bytes = response_json.as_bytes();
+                let response_len = response_bytes.len() as u32;
+                write_half.write_all(&response_len.to_le_bytes()).await?;
+                write_half.write_all(response_bytes).await?;
+                continue;
+            }
+        };
+
         // Handle different request types
         let response = match request.request_type.as_str() {
             "AddMemoryContext" => handle_add_memory_context(&layer, &request, &conn_id).await,
             "PredictContext" => handle_predict_context(&layer, &request, &conn_id).await,
             "GetContextHistory" => handle_get_context_history(&layer, &request, &conn_id).await,
             "Ping" => handle_ping(&request).await,
-            "HealthCheck" => handle_health_check(&layer, &request, server_start_time).await,
+            "HealthCheck" => handle_health_check(&pool_manager, &layer, &request, server_start_time).await,
+            "ListPools" => handle_list_pools(&pool_manager, &request).await,
             _ => ContextResponse {
                 response_type: "error".to_string(),
                 request_id: request.request_id,
@@ -137,9 +166,10 @@ async fn handle_connection(
         write_half.write_all(response_bytes).await?;
     }
 
-    // Connection closed - clean up resources
+    // Connection closed - clean up resources in all pools
     eprintln!("Connection closed: {} - cleaning up resources", conn_id);
-    layer.cleanup_connection(&conn_id).await;
+    // Note: We can't clean up specific connections across all pools here
+    // Connections are pool-specific and should be cleaned up by the pool when needed
 
     Ok(())
 }
@@ -287,6 +317,7 @@ async fn handle_ping(request: &ContextRequest) -> ContextResponse {
 }
 
 async fn handle_health_check(
+    pool_manager: &Arc<PoolManager>,
     layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
     server_start_time: std::time::Instant,
@@ -297,10 +328,14 @@ async fn handle_health_check(
     // Get memory stats from the layer
     let memory_stats = layer.get_memory_stats().await;
 
+    // Get pool count
+    let pool_count = pool_manager.pool_count().await;
+
     // Get actual metrics from the layer
     let metrics = serde_json::json!({
         "memory_stats": memory_stats,
         "uptime_seconds": uptime_seconds,
+        "pool_count": pool_count,
     });
 
     ContextResponse {
@@ -312,8 +347,28 @@ async fn handle_health_check(
             "layer": "Layer4_CPE",
             "timestamp": timestamp,
             "uptime_seconds": uptime_seconds,
+            "pool_id": request.pool_id,
+            "pool_count": pool_count,
             "metrics": metrics,
             "memory_info": memory_stats,
+        })
+    }
+}
+
+async fn handle_list_pools(
+    pool_manager: &Arc<PoolManager>,
+    request: &ContextRequest,
+) -> ContextResponse {
+    let pools = pool_manager.list_pools().await;
+    let pool_count = pools.len();
+
+    ContextResponse {
+        response_type: "ListPools_Response".to_string(),
+        request_id: request.request_id.clone(),
+        success: true,
+        data: serde_json::json!({
+            "pools": pools,
+            "pool_count": pool_count,
         })
     }
 }
@@ -353,31 +408,37 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    println!("🧠 Starting Layer 4 CPE Socket Server");
+    println!("🧠 Starting Layer 4 CPE Socket Server (Multi-Pool)");
     println!("🎯 Target: Context prediction and temporal analysis");
     println!("🔗 Socket: /tmp/mfn_layer4.sock");
-    
-    // Create CPE instance
+
+    // Create data directory for all pools
+    let data_dir = PathBuf::from("/usr/lib/alembic/mfn/memory/layer4_cpe");
+    std::fs::create_dir_all(&data_dir)?;
+    println!("💾 Multi-pool persistence enabled: {}", data_dir.display());
+    println!("📦 Default pool: crucible_training");
+
+    // Create PoolManager
     let config = ContextPredictionConfig::default();
-    let layer = Arc::new(ContextPredictionLayer::new(config).await?);
-    
+    let pool_manager = Arc::new(PoolManager::new(data_dir, config));
+
     // Remove existing socket file
     let socket_path = "/tmp/mfn_layer4.sock";
     if std::path::Path::new(socket_path).exists() {
         std::fs::remove_file(socket_path)?;
     }
-    
+
     // Bind to Unix socket
     let listener = UnixListener::bind(socket_path)?;
     println!("✅ Layer 4 CPE socket server listening on {}", socket_path);
-    println!("🔮 Operations: AddMemoryContext, PredictContext, GetContextHistory, Ping");
-    
+    println!("🔮 Operations: AddMemoryContext, PredictContext, GetContextHistory, Ping, HealthCheck, ListPools");
+
     // Track server start time for health checks
     let server_start_time = std::time::Instant::now();
 
     // Handle graceful shutdown
     tokio::select! {
-        result = serve_connections(listener, layer, server_start_time) => {
+        result = serve_connections(listener, pool_manager, server_start_time) => {
             if let Err(e) = result {
                 eprintln!("❌ Server error: {}", e);
             }
@@ -397,15 +458,15 @@ async fn main() -> Result<()> {
 
 async fn serve_connections(
     listener: UnixListener,
-    layer: Arc<ContextPredictionLayer>,
+    pool_manager: Arc<PoolManager>,
     server_start_time: std::time::Instant,
 ) -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
-        let layer_clone = Arc::clone(&layer);
+        let pool_manager_clone = Arc::clone(&pool_manager);
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, layer_clone, server_start_time).await {
+            if let Err(e) = handle_connection(stream, pool_manager_clone, server_start_time).await {
                 eprintln!("Connection error: {}", e);
             }
         });

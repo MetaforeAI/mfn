@@ -3,12 +3,14 @@ package alm
 import (
 	"context"
 	"fmt"
+	"log"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mfn/layer3_alm/internal/config"
+	"github.com/mfn/layer3_alm/internal/persistence"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -36,21 +38,42 @@ type ALM struct {
 
 	// Performance optimizations
 	useOptimizedSearch bool
+
+	// Persistence (optional)
+	persistenceConfig *persistence.Config
+	aofHandle         *persistence.AofHandle
+	aofEntryChan      chan *persistence.AofEntry
+	snapshotCreator   *persistence.SnapshotCreator
+	snapshotTicker    *time.Ticker
+
+	// Pool identification for metrics
+	poolID            string
 }
 
 // NewALM creates a new Associative Link Mesh instance
 func NewALM(config *config.ALMConfig) (*ALM, error) {
+	return NewALMWithPersistence(config, nil)
+}
+
+// NewALMWithPersistence creates a new Associative Link Mesh instance with optional persistence
+func NewALMWithPersistence(config *config.ALMConfig, persistConfig *persistence.Config) (*ALM, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
+	poolID := "default"
+	if persistConfig != nil {
+		poolID = persistConfig.PoolID
+	}
+
 	alm := &ALM{
 		config:             config,
 		ctx:                ctx,
 		cancel:             cancel,
 		metrics:            &PerformanceMetrics{},
-		monitor:            NewPerformanceMonitor(),
+		monitor:            nil, // Disabled for multi-pool to avoid metric collisions
 		useOptimizedSearch: true, // Enable optimized search by default
+		poolID:             poolID,
 	}
-	
+
 	// Initialize memory graph with full configuration
 	graph, err := NewMemoryGraphWithConfig(
 		config.MaxMemories,
@@ -63,7 +86,7 @@ func NewALM(config *config.ALMConfig) (*ALM, error) {
 		return nil, fmt.Errorf("failed to create memory graph: %w", err)
 	}
 	alm.graph = graph
-	
+
 	// Initialize performance optimizations
 	alm.pool = NewObjectPool()
 	alm.cache = NewMemoryCache(10000, 5000, 2000)
@@ -74,13 +97,57 @@ func NewALM(config *config.ALMConfig) (*ALM, error) {
 	// Initialize both searchers
 	alm.searcher = NewAssociativeSearcher(alm.graph, config)
 	alm.optimizedSearcher = NewOptimizedSearcher(alm.graph, config)
-	
+
+	// Optional persistence initialization
+	if persistConfig != nil {
+		log.Printf("Initializing persistence: data_dir=%s, pool_id=%s",
+			persistConfig.DataDir, persistConfig.PoolID)
+
+		// Create AOF writer
+		aofHandle, entryChan := persistence.NewAofHandle()
+		aofWriter, err := persistence.NewAofWriter(
+			persistConfig.AofPath(),
+			entryChan,
+			persistConfig.FsyncIntervalMs,
+			persistConfig.AofBufferSize,
+		)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create AOF writer: %w", err)
+		}
+
+		// Start AOF writer in background
+		go func() {
+			if err := aofWriter.Run(); err != nil {
+				log.Printf("AOF writer error: %v", err)
+			}
+		}()
+
+		// Create snapshot creator
+		snapshotCreator, err := persistence.NewSnapshotCreator(persistConfig.SnapshotPath())
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create snapshot creator: %w", err)
+		}
+
+		alm.persistenceConfig = persistConfig
+		alm.aofHandle = aofHandle
+		alm.aofEntryChan = entryChan
+		alm.snapshotCreator = snapshotCreator
+
+		// Start background snapshot task
+		alm.startSnapshotTask()
+
+		log.Printf("Persistence enabled: AOF=%s, snapshots every %ds",
+			persistConfig.AofPath(), persistConfig.SnapshotIntervalSecs)
+	}
+
 	// Start background tasks
 	alm.startBackgroundTasks()
-	
+
 	// Register Prometheus metrics
 	alm.registerMetrics()
-	
+
 	return alm, nil
 }
 
@@ -115,9 +182,16 @@ func (alm *ALM) AddMemory(memory *Memory) error {
 		}
 		return wrappedErr
 	}
-	
+
+	// Log to AOF (non-blocking)
+	if alm.aofHandle != nil {
+		if err := alm.aofHandle.LogAddMemory(persistence.MemoryId(memory.ID), memory.Content, nil); err != nil {
+			log.Printf("Warning: Failed to log to AOF: %v", err)
+		}
+	}
+
 	alm.metrics.MemoriesAdded++
-	memoriesAddedCounter.Inc()
+	memoriesAddedCounter.WithLabelValues(alm.poolID).Inc()
 	
 	// Auto-discover associations if enabled
 	if alm.config.EnableAutoDiscovery && alm.goroutinePool != nil {
@@ -149,7 +223,7 @@ func (alm *ALM) AddAssociation(assoc *Association) error {
 	}
 	
 	alm.metrics.AssociationsAdded++
-	associationsAddedCounter.Inc()
+	associationsAddedCounter.WithLabelValues(alm.poolID).Inc()
 	
 	return nil
 }
@@ -320,6 +394,17 @@ func (alm *ALM) Close() error {
 		alm.gcTicker.Stop()
 	}
 
+	// Stop persistence
+	if alm.snapshotTicker != nil {
+		alm.snapshotTicker.Stop()
+	}
+	if alm.aofHandle != nil {
+		alm.aofHandle.Close()
+	}
+	if alm.snapshotCreator != nil {
+		alm.snapshotCreator.Close()
+	}
+
 	// Close goroutine pool
 	if alm.goroutinePool != nil {
 		alm.goroutinePool.Close()
@@ -427,8 +512,65 @@ func (alm *ALM) performGC() {
 func (alm *ALM) performWeightDecay() {
 	alm.mu.Lock()
 	defer alm.mu.Unlock()
-	
+
 	alm.graph.ApplyWeightDecay(alm.config.WeightDecayRate)
+}
+
+// startSnapshotTask starts the background snapshot task
+func (alm *ALM) startSnapshotTask() {
+	if alm.persistenceConfig == nil || alm.snapshotCreator == nil {
+		return
+	}
+
+	alm.snapshotTicker = time.NewTicker(
+		time.Duration(alm.persistenceConfig.SnapshotIntervalSecs) * time.Second,
+	)
+
+	alm.wg.Add(1)
+	go func() {
+		defer alm.wg.Done()
+		for {
+			select {
+			case <-alm.snapshotTicker.C:
+				// Create snapshot from current graph state
+				edges := alm.getEdgesForSnapshot()
+				if err := alm.snapshotCreator.CreateSnapshot(edges); err != nil {
+					log.Printf("Failed to create snapshot: %v", err)
+				} else {
+					log.Printf("Snapshot created: %d edges", len(edges))
+				}
+			case <-alm.ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// getEdgesForSnapshot extracts edges from the graph for snapshotting
+func (alm *ALM) getEdgesForSnapshot() map[persistence.MemoryId]*persistence.EdgeSnapshot {
+	alm.mu.RLock()
+	defer alm.mu.RUnlock()
+
+	edges := make(map[persistence.MemoryId]*persistence.EdgeSnapshot)
+
+	// Get all memories from graph
+	memories := alm.graph.GetAllMemories()
+	for _, memory := range memories {
+		var connectionID *string
+		// Note: We don't track connection_id at ALM level yet, so it's nil
+		edge := &persistence.EdgeSnapshot{
+			MemoryId:                persistence.MemoryId(memory.ID),
+			Content:                 memory.Content,
+			Strength:                1.0, // Default strength
+			ActivationCount:         uint64(memory.AccessCount),
+			ConnectionId:            connectionID,
+			CreatedTimestampMs:      memory.CreatedAt.UnixMilli(),
+			LastAccessedTimestampMs: memory.LastAccessed.UnixMilli(),
+		}
+		edges[persistence.MemoryId(memory.ID)] = edge
+	}
+
+	return edges
 }
 
 // discoverAssociations automatically discovers associations for a new memory
@@ -501,37 +643,42 @@ func (alm *ALM) updateSearchMetrics(searchTime time.Duration) {
 	}
 	
 	// Update Prometheus metrics
-	searchDurationHistogram.Observe(searchTime.Seconds())
-	searchCounter.Inc()
+	searchDurationHistogram.WithLabelValues(alm.poolID).Observe(searchTime.Seconds())
+	searchCounter.WithLabelValues(alm.poolID).Inc()
 }
 
-// Prometheus metrics
+// Prometheus metrics (shared across all pools)
 var (
-	searchCounter = promauto.NewCounter(prometheus.CounterOpts{
+	searchCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "alm_searches_total",
 		Help: "Total number of associative searches performed",
-	})
-	
-	searchDurationHistogram = promauto.NewHistogram(prometheus.HistogramOpts{
+	}, []string{"pool_id"})
+
+	searchDurationHistogram = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "alm_search_duration_seconds",
 		Help: "Duration of associative searches",
 		Buckets: prometheus.ExponentialBuckets(0.001, 2, 10), // 1ms to ~1s
-	})
-	
-	memoriesAddedCounter = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "alm_memories_added_total", 
+	}, []string{"pool_id"})
+
+	memoriesAddedCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "alm_memories_added_total",
 		Help: "Total number of memories added",
-	})
-	
-	associationsAddedCounter = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"pool_id"})
+
+	associationsAddedCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "alm_associations_added_total",
 		Help: "Total number of associations added",
-	})
-	
+	}, []string{"pool_id"})
+
 	memoryGraphSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "alm_graph_size",
 		Help: "Size of the memory graph",
-	}, []string{"type"})
+	}, []string{"pool_id", "type"})
+)
+
+var (
+	metricsRegistered bool
+	metricsOnce       sync.Once
 )
 
 // registerMetrics registers Prometheus metrics
@@ -540,15 +687,15 @@ func (alm *ALM) registerMetrics() {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-alm.ctx.Done():
 				return
 			case <-ticker.C:
 				stats := alm.GetGraphStats()
-				memoryGraphSize.WithLabelValues("memories").Set(float64(stats.TotalMemories))
-				memoryGraphSize.WithLabelValues("associations").Set(float64(stats.TotalAssociations))
+				memoryGraphSize.WithLabelValues(alm.poolID, "memories").Set(float64(stats.TotalMemories))
+				memoryGraphSize.WithLabelValues(alm.poolID, "associations").Set(float64(stats.TotalAssociations))
 			}
 		}
 	}()

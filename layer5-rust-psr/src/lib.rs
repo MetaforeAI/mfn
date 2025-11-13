@@ -34,22 +34,100 @@ use anyhow::Result;
 pub struct PatternRegistry {
     storage: Arc<RwLock<PatternStorage>>,
     search: Arc<SearchEngine>,
+
+    // Persistence (optional)
+    aof_handle: Option<persistence::AofHandle>,
+    snapshot_creator: Option<Arc<persistence::SnapshotCreator>>,
+    snapshot_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl PatternRegistry {
-    /// Create new pattern registry
+    /// Create new pattern registry without persistence
     pub fn new() -> Self {
+        Self::new_with_persistence(None).expect("Failed to create PatternRegistry")
+    }
+
+    /// Create new pattern registry with optional persistence
+    pub fn new_with_persistence(
+        persistence_config: Option<PersistenceConfig>,
+    ) -> Result<Self> {
         let storage = Arc::new(RwLock::new(PatternStorage::new()));
         let search = Arc::new(SearchEngine::new(storage.clone()));
 
-        Self { storage, search }
+        // Optional persistence initialization
+        let (aof_handle, snapshot_creator, snapshot_task) = if let Some(pconfig) = persistence_config {
+            tracing::info!(
+                "Initializing persistence: data_dir={}, pool_id={}",
+                pconfig.data_dir.display(),
+                pconfig.pool_id
+            );
+
+            // Create AOF writer
+            let (handle, rx) = persistence::AofHandle::new();
+            let aof_path = pconfig.aof_path();
+            let mut aof_writer = persistence::AofWriter::new(
+                &aof_path,
+                rx,
+                pconfig.fsync_interval_ms,
+            )?;
+
+            // Start AOF background task
+            tokio::spawn(async move {
+                if let Err(e) = aof_writer.run().await {
+                    tracing::error!("AOF writer error: {}", e);
+                }
+            });
+
+            // Create snapshot creator
+            let snapshot_creator = Arc::new(
+                persistence::SnapshotCreator::new(pconfig.snapshot_path())?
+            );
+
+            // Start background snapshot task
+            let snapshot_task = Self::start_snapshot_task(
+                storage.clone(),
+                snapshot_creator.clone(),
+                pconfig.snapshot_interval_secs,
+            );
+
+            tracing::info!(
+                "Persistence enabled: AOF={}, snapshots every {}s",
+                aof_path.display(),
+                pconfig.snapshot_interval_secs
+            );
+
+            (Some(handle), Some(snapshot_creator), Some(snapshot_task))
+        } else {
+            (None, None, None)
+        };
+
+        Ok(Self {
+            storage,
+            search,
+            aof_handle,
+            snapshot_creator,
+            snapshot_task,
+        })
     }
 
     /// Store a pattern
     pub fn store_pattern(&self, pattern: Pattern) -> Result<String> {
         let pattern_id = pattern.id.clone();
+
+        // Log to AOF (non-blocking) BEFORE storing to ensure durability
+        if let Some(ref aof) = self.aof_handle {
+            aof.log_add_pattern(
+                pattern_id.clone(),
+                pattern.name.clone(),
+                format!("{:?}", pattern.category),
+                pattern.embedding.clone(),
+                None,
+            )?;
+        }
+
         self.storage.write().store(pattern)?;
         self.search.index_pattern(&pattern_id)?;
+
         Ok(pattern_id)
     }
 
@@ -75,7 +153,26 @@ impl PatternRegistry {
 
     /// Update pattern statistics
     pub fn update_stats(&self, pattern_id: &str, activation_count_delta: u64, last_used_step: u64) -> Result<()> {
-        self.storage.write().update_stats(pattern_id, activation_count_delta, last_used_step)
+        // Update storage first
+        self.storage.write().update_stats(pattern_id, activation_count_delta, last_used_step)?;
+
+        // Log to AOF (non-blocking)
+        if let Some(ref aof) = self.aof_handle {
+            let activation_count = {
+                let storage = self.storage.read();
+                let pattern = storage.get(pattern_id)
+                    .ok_or_else(|| anyhow::anyhow!("Pattern not found: {}", pattern_id))?;
+                pattern.activation_count
+            };
+
+            aof.log_update_pattern(
+                pattern_id.to_string(),
+                activation_count,
+                last_used_step,
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Compose two patterns (P ∘ Q)
@@ -97,6 +194,11 @@ impl PatternRegistry {
 
     /// Delete a pattern
     pub fn delete_pattern(&self, pattern_id: &str) -> Result<()> {
+        // Log to AOF (non-blocking) BEFORE deleting to ensure durability
+        if let Some(ref aof) = self.aof_handle {
+            aof.log_remove_pattern(pattern_id.to_string(), "explicit_delete".to_string())?;
+        }
+
         self.storage.write().delete(pattern_id)?;
         self.search.remove_from_index(pattern_id)?;
         Ok(())
@@ -105,6 +207,133 @@ impl PatternRegistry {
     /// Get pattern count
     pub fn pattern_count(&self) -> usize {
         self.storage.read().count()
+    }
+
+    /// Start background task for periodic snapshots
+    fn start_snapshot_task(
+        storage: Arc<RwLock<PatternStorage>>,
+        snapshot_creator: Arc<persistence::SnapshotCreator>,
+        interval_secs: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                tokio::time::Duration::from_secs(interval_secs)
+            );
+
+            loop {
+                interval.tick().await;
+
+                // Create snapshot from current storage state
+                let pattern_snapshots = {
+                    let storage = storage.read();
+                    let mut snapshots = std::collections::HashMap::new();
+
+                    for id in storage.pattern_ids() {
+                        if let Some(pattern) = storage.get(&id) {
+                            let snapshot = persistence::PatternSnapshot {
+                                pattern_id: pattern.id.clone(),
+                                name: pattern.name.clone(),
+                                category: format!("{:?}", pattern.category),
+                                embedding: pattern.embedding.clone(),
+                                activation_count: pattern.activation_count,
+                                connection_id: None,
+                                created_timestamp_ms: pattern.created_at,
+                                last_used_timestamp_ms: pattern.last_used_step,
+                                composition_history: pattern.source_patterns.clone(),
+                            };
+                            snapshots.insert(id.clone(), snapshot);
+                        }
+                    }
+                    snapshots
+                };
+
+                match snapshot_creator.create_snapshot(&pattern_snapshots) {
+                    Ok(_) => {
+                        tracing::info!("Snapshot created: {} patterns", pattern_snapshots.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create snapshot: {}", e);
+                    }
+                }
+            }
+        })
+    }
+
+    /// Recover PatternRegistry from persistence (snapshot + AOF replay)
+    pub fn recover_from_persistence(
+        persistence_config: PersistenceConfig,
+    ) -> Result<Self> {
+        tracing::info!(
+            "Starting recovery from: {}",
+            persistence_config.data_dir.display()
+        );
+
+        // Create recovery manager
+        let recovery_manager = persistence::RecoveryManager::new(
+            persistence_config.snapshot_path()
+        )?;
+
+        // Recover pattern snapshots from snapshot + AOF
+        let (pattern_snapshots, stats) = recovery_manager.recover(
+            persistence_config.aof_path()
+        )?;
+
+        tracing::info!(
+            "Recovery complete: {} patterns recovered ({} from snapshot, {} from AOF) in {:.2}ms",
+            stats.final_pattern_count,
+            stats.snapshot_patterns_loaded,
+            stats.aof_entries_replayed,
+            stats.recovery_duration_ms
+        );
+
+        // Create new registry with persistence
+        let registry = Self::new_with_persistence(Some(persistence_config))?;
+
+        // Load recovered patterns into storage
+        {
+            let mut storage = registry.storage.write();
+            for (_, snapshot) in pattern_snapshots {
+                let pattern = Self::pattern_from_snapshot(snapshot)?;
+                storage.store(pattern)?;
+            }
+        }
+
+        Ok(registry)
+    }
+
+    /// Convert PatternSnapshot to Pattern
+    fn pattern_from_snapshot(snapshot: persistence::PatternSnapshot) -> Result<Pattern> {
+        use crate::pattern::PatternCategory;
+
+        let category = match snapshot.category.as_str() {
+            "Temporal" => PatternCategory::Temporal,
+            "Spatial" => PatternCategory::Spatial,
+            "Transformational" => PatternCategory::Transformational,
+            "Relational" => PatternCategory::Relational,
+            _ => PatternCategory::Transformational,
+        };
+
+        Ok(Pattern {
+            id: snapshot.pattern_id,
+            name: snapshot.name,
+            category,
+            embedding: snapshot.embedding,
+            source_patterns: snapshot.composition_history,
+            composable_with: vec![],
+            slots: Default::default(),
+            constraints: vec![],
+            domain: crate::pattern::PatternType::Any,
+            codomain: crate::pattern::PatternType::Any,
+            text_example: String::new(),
+            image_example: String::new(),
+            audio_example: String::new(),
+            code_example: String::new(),
+            activation_count: snapshot.activation_count,
+            confidence: 1.0,
+            first_seen_step: snapshot.created_timestamp_ms,
+            last_used_step: snapshot.last_used_timestamp_ms,
+            created_at: snapshot.created_timestamp_ms,
+        })
     }
 }
 

@@ -22,7 +22,7 @@ use tracing::{info, debug, warn, error};
 use uuid::Uuid;
 
 use crate::{
-    DynamicSimilarityReservoir, MemoryId
+    DynamicSimilarityReservoir, MemoryId, PoolManager
 };
 
 /// Default socket path for Layer 2 DSR
@@ -59,6 +59,7 @@ pub enum SocketRequest {
     /// Add memory to the reservoir
     AddMemory {
         request_id: String,
+        pool_id: Option<String>,
         memory_id: u64,
         embedding: Vec<f32>,
         content: String,
@@ -69,6 +70,7 @@ pub enum SocketRequest {
     /// Search for similar memories
     SimilaritySearch {
         request_id: String,
+        pool_id: Option<String>,
         query_embedding: Vec<f32>,
         top_k: usize,
         min_confidence: Option<f32>,
@@ -78,11 +80,13 @@ pub enum SocketRequest {
     /// Get performance statistics
     GetStats {
         request_id: String,
+        pool_id: Option<String>,
     },
 
     /// Optimize reservoir performance
     OptimizeReservoir {
         request_id: String,
+        pool_id: Option<String>,
     },
 
     /// Health check / ping
@@ -98,6 +102,7 @@ pub enum SocketRequest {
     /// Get memory by ID (if supported by future versions)
     GetMemory {
         request_id: String,
+        pool_id: Option<String>,
         memory_id: u64,
     },
 }
@@ -154,7 +159,8 @@ pub struct ConnectionStats {
 /// Main Unix Socket Server for Layer 2 DSR
 pub struct SocketServer {
     config: SocketServerConfig,
-    dsr: Arc<DynamicSimilarityReservoir>,
+    dsr: Option<Arc<DynamicSimilarityReservoir>>,
+    pool_manager: Option<Arc<PoolManager>>,
     listener: Option<UnixListener>,
     running: Arc<RwLock<bool>>,
     connections: Arc<RwLock<HashMap<String, ConnectionStats>>>,
@@ -167,14 +173,34 @@ pub struct SocketServer {
 }
 
 impl SocketServer {
-    /// Create a new socket server instance
+    /// Create a new socket server instance with single DSR (backwards compatibility)
     pub fn new(
         dsr: Arc<DynamicSimilarityReservoir>,
         config: Option<SocketServerConfig>,
     ) -> Self {
         Self {
             config: config.unwrap_or_default(),
-            dsr,
+            dsr: Some(dsr),
+            pool_manager: None,
+            listener: None,
+            running: Arc::new(RwLock::new(false)),
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            total_requests: Arc::new(RwLock::new(0)),
+            total_connections: Arc::new(RwLock::new(0)),
+            active_connections: Arc::new(RwLock::new(0)),
+            start_time: Instant::now(),
+        }
+    }
+
+    /// Create a new socket server instance with pool manager (multi-pool support)
+    pub fn new_with_pool_manager(
+        pool_manager: Arc<PoolManager>,
+        config: Option<SocketServerConfig>,
+    ) -> Self {
+        Self {
+            config: config.unwrap_or_default(),
+            dsr: None,
+            pool_manager: Some(pool_manager),
             listener: None,
             running: Arc::new(RwLock::new(false)),
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -298,7 +324,8 @@ impl SocketServer {
 
     /// Spawn a connection handler task
     async fn spawn_connection_handler(&self, stream: UnixStream, connection_id: String) {
-        let dsr = Arc::clone(&self.dsr);
+        let dsr = self.dsr.as_ref().map(Arc::clone);
+        let pool_manager = self.pool_manager.as_ref().map(Arc::clone);
         let config = self.config.clone();
         let connections = Arc::clone(&self.connections);
         let total_requests = Arc::clone(&self.total_requests);
@@ -330,6 +357,7 @@ impl SocketServer {
                 stream,
                 connection_id,
                 dsr,
+                pool_manager,
                 config,
                 connections.clone(),
                 total_requests,
@@ -353,7 +381,8 @@ impl SocketServer {
     async fn handle_connection(
         stream: UnixStream,
         connection_id: String,
-        dsr: Arc<DynamicSimilarityReservoir>,
+        dsr: Option<Arc<DynamicSimilarityReservoir>>,
+        pool_manager: Option<Arc<PoolManager>>,
         config: SocketServerConfig,
         connections: Arc<RwLock<HashMap<String, ConnectionStats>>>,
         total_requests: Arc<RwLock<u64>>,
@@ -416,6 +445,7 @@ impl SocketServer {
                         let response = Self::process_request(
                             &request,
                             &dsr,
+                            &pool_manager,
                             &config,
                             server_start_time,
                             Some(connection_id.clone()),
@@ -470,20 +500,42 @@ impl SocketServer {
         }
 
         // Clean up wells associated with this connection
-        if let Err(e) = dsr.cleanup_connection(&connection_id).await {
-            error!("Failed to cleanup connection {}: {}", connection_id, e);
-        } else {
-            debug!("Cleaned up wells for connection {}", connection_id);
+        if let Some(ref dsr) = dsr {
+            if let Err(e) = dsr.cleanup_connection(&connection_id).await {
+                error!("Failed to cleanup connection {}: {}", connection_id, e);
+            } else {
+                debug!("Cleaned up wells for connection {}", connection_id);
+            }
         }
 
         debug!("Connection {} handler finished", connection_id);
         Ok(())
     }
 
+    /// Helper to get pool from either single DSR or pool manager
+    async fn get_pool(
+        dsr: &Option<Arc<DynamicSimilarityReservoir>>,
+        pool_manager: &Option<Arc<PoolManager>>,
+        pool_id: &str,
+    ) -> Result<Arc<DynamicSimilarityReservoir>> {
+        // If single DSR mode, return it regardless of pool_id
+        if let Some(ref single_dsr) = dsr {
+            return Ok(Arc::clone(single_dsr));
+        }
+
+        // If pool manager mode, get or create the pool
+        if let Some(ref pm) = pool_manager {
+            return pm.get_or_create_pool(pool_id).await;
+        }
+
+        Err(anyhow!("No DSR or pool manager configured"))
+    }
+
     /// Process a request and route to appropriate handler with connection context
     async fn process_request(
         request: &SocketRequest,
-        dsr: &Arc<DynamicSimilarityReservoir>,
+        dsr: &Option<Arc<DynamicSimilarityReservoir>>,
+        pool_manager: &Option<Arc<PoolManager>>,
         config: &SocketServerConfig,
         server_start_time: Instant,
         connection_id: Option<String>,
@@ -491,45 +543,113 @@ impl SocketServer {
         let start_time = Instant::now();
 
         let response = match request {
-            SocketRequest::AddMemory { request_id, memory_id, embedding, content, tags, metadata } => {
-                Self::handle_add_memory(
-                    request_id.clone(),
-                    *memory_id,
-                    embedding.clone(),
-                    content.clone(),
-                    tags.clone().unwrap_or_default(),
-                    metadata.clone().unwrap_or_default(),
-                    dsr,
-                    start_time,
-                    connection_id,
-                ).await
+            SocketRequest::AddMemory { request_id, pool_id, memory_id, embedding, content, tags, metadata } => {
+                // Get pool from pool_id (default: "crucible_training")
+                let pool_id_str = pool_id.as_deref().unwrap_or("crucible_training");
+                match Self::get_pool(dsr, pool_manager, pool_id_str).await {
+                    Ok(pool_dsr) => {
+                        Self::handle_add_memory(
+                            request_id.clone(),
+                            *memory_id,
+                            embedding.clone(),
+                            content.clone(),
+                            tags.clone().unwrap_or_default(),
+                            metadata.clone().unwrap_or_default(),
+                            &pool_dsr,
+                            start_time,
+                            connection_id,
+                        ).await
+                    },
+                    Err(e) => {
+                        SocketResponse::Error {
+                            request_id: request_id.clone(),
+                            error: format!("Failed to get pool '{}': {}", pool_id_str, e),
+                            error_code: "POOL_ACCESS_FAILED".to_string(),
+                        }
+                    }
+                }
             },
-            SocketRequest::SimilaritySearch { request_id, query_embedding, top_k, min_confidence, timeout_ms } => {
-                Self::handle_similarity_search(
-                    request_id.clone(),
-                    query_embedding.clone(),
-                    *top_k,
-                    dsr,
-                    start_time,
-                ).await
+            SocketRequest::SimilaritySearch { request_id, pool_id, query_embedding, top_k, min_confidence, timeout_ms } => {
+                let pool_id_str = pool_id.as_deref().unwrap_or("crucible_training");
+                match Self::get_pool(dsr, pool_manager, pool_id_str).await {
+                    Ok(pool_dsr) => {
+                        Self::handle_similarity_search(
+                            request_id.clone(),
+                            query_embedding.clone(),
+                            *top_k,
+                            &pool_dsr,
+                            start_time,
+                        ).await
+                    },
+                    Err(e) => {
+                        SocketResponse::Error {
+                            request_id: request_id.clone(),
+                            error: format!("Failed to get pool '{}': {}", pool_id_str, e),
+                            error_code: "POOL_ACCESS_FAILED".to_string(),
+                        }
+                    }
+                }
             },
-            SocketRequest::GetStats { request_id } => {
-                Self::handle_get_stats(request_id.clone(), dsr, start_time).await
+            SocketRequest::GetStats { request_id, pool_id } => {
+                let pool_id_str = pool_id.as_deref().unwrap_or("crucible_training");
+                match Self::get_pool(dsr, pool_manager, pool_id_str).await {
+                    Ok(pool_dsr) => {
+                        Self::handle_get_stats(request_id.clone(), &pool_dsr, start_time).await
+                    },
+                    Err(e) => {
+                        SocketResponse::Error {
+                            request_id: request_id.clone(),
+                            error: format!("Failed to get pool '{}': {}", pool_id_str, e),
+                            error_code: "POOL_ACCESS_FAILED".to_string(),
+                        }
+                    }
+                }
             },
-            SocketRequest::OptimizeReservoir { request_id } => {
-                Self::handle_optimize_reservoir(
-                    request_id.clone(),
-                    dsr,
-                    start_time,
-                ).await
+            SocketRequest::OptimizeReservoir { request_id, pool_id } => {
+                let pool_id_str = pool_id.as_deref().unwrap_or("crucible_training");
+                match Self::get_pool(dsr, pool_manager, pool_id_str).await {
+                    Ok(pool_dsr) => {
+                        Self::handle_optimize_reservoir(
+                            request_id.clone(),
+                            &pool_dsr,
+                            start_time,
+                        ).await
+                    },
+                    Err(e) => {
+                        SocketResponse::Error {
+                            request_id: request_id.clone(),
+                            error: format!("Failed to get pool '{}': {}", pool_id_str, e),
+                            error_code: "POOL_ACCESS_FAILED".to_string(),
+                        }
+                    }
+                }
             },
             SocketRequest::Ping { request_id } => {
                 Self::handle_ping(request_id.clone(), start_time).await
             },
             SocketRequest::HealthCheck { request_id } => {
-                Self::handle_health_check(request_id.clone(), dsr, config, start_time).await
+                // Health check uses default pool if available
+                match Self::get_pool(dsr, pool_manager, "crucible_training").await {
+                    Ok(pool_dsr) => {
+                        Self::handle_health_check(request_id.clone(), &pool_dsr, config, start_time).await
+                    },
+                    Err(_) => {
+                        // If no pool available, return basic health check
+                        SocketResponse::HealthCheckResponse {
+                            request_id: request_id.clone(),
+                            status: "healthy".to_string(),
+                            layer: "Layer2_DSR".to_string(),
+                            timestamp: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            uptime_seconds: server_start_time.elapsed().as_secs(),
+                            metrics: serde_json::json!({ "no_pools": true }),
+                        }
+                    }
+                }
             },
-            SocketRequest::GetMemory { request_id, memory_id } => {
+            SocketRequest::GetMemory { request_id, pool_id, memory_id } => {
                 // Not yet implemented, return error
                 SocketResponse::Error {
                     request_id: request_id.clone(),
@@ -803,14 +923,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_ping_request() {
+        use tokio::io::AsyncReadExt;
+
         let dsr = create_test_dsr().await;
         let config = SocketServerConfig {
             socket_path: "/tmp/test_layer2_ping.sock".to_string(),
             ..Default::default()
         };
-        
+
         let mut server = SocketServer::new(dsr, Some(config));
-        
+
         // Start server in background
         let server_handle = tokio::spawn(async move {
             server.start().await
@@ -819,22 +941,31 @@ mod tests {
         // Give server time to start
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Connect and send ping
+        // Connect and send ping using binary protocol
         let mut stream = UnixStream::connect("/tmp/test_layer2_ping.sock").await.unwrap();
-        
+
         let ping_request = SocketRequest::Ping {
             request_id: "test-ping".to_string(),
         };
-        
-        let request_line = format!("{}\n", serde_json::to_string(&ping_request).unwrap());
-        stream.write_all(request_line.as_bytes()).await.unwrap();
 
-        let mut reader = BufReader::new(stream);
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line).await.unwrap();
-        
-        let response: SocketResponse = serde_json::from_str(response_line.trim()).unwrap();
-        
+        // Send using binary protocol: length (4 bytes) + JSON
+        let request_json = serde_json::to_string(&ping_request).unwrap();
+        let request_bytes = request_json.as_bytes();
+        let request_len = request_bytes.len() as u32;
+
+        stream.write_all(&request_len.to_le_bytes()).await.unwrap();
+        stream.write_all(request_bytes).await.unwrap();
+
+        // Read response using binary protocol: length (4 bytes) + JSON
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await.unwrap();
+        let response_len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut response_buf = vec![0u8; response_len];
+        stream.read_exact(&mut response_buf).await.unwrap();
+
+        let response: SocketResponse = serde_json::from_slice(&response_buf).unwrap();
+
         match response {
             SocketResponse::Pong { request_id, layer, .. } => {
                 assert_eq!(request_id, "test-ping");
@@ -844,7 +975,7 @@ mod tests {
         }
 
         // Cleanup
-        drop(reader);
+        drop(stream);
         server_handle.abort();
         let _ = std::fs::remove_file("/tmp/test_layer2_ping.sock");
     }
