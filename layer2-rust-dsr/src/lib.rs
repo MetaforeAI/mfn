@@ -13,6 +13,7 @@
 //! - Integration: FFI bindings with Zig Layer 1
 
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use ndarray::{Array1, Array2, ArrayView1};
 use anyhow::Result;
@@ -87,7 +88,9 @@ impl Default for DSRConfig {
 /// Main Dynamic Similarity Reservoir implementation
 pub struct DynamicSimilarityReservoir {
     config: DSRConfig,
-    encoder: Arc<dyn SpikeEncoder>,
+    // Dynamic multi-encoder pool: supports multiple embedding dimensions
+    // Key = embedding dimension, Value = encoder for that dimension
+    encoders: Arc<RwLock<HashMap<usize, Arc<dyn SpikeEncoder>>>>,
     reservoir: Arc<RwLock<SimilarityReservoir>>,
     matcher: Arc<SimilarityMatcher>,
 
@@ -113,7 +116,9 @@ impl DynamicSimilarityReservoir {
         config: DSRConfig,
         persistence_config: Option<PersistenceConfig>,
     ) -> Result<Self> {
-        let encoder = encoding::create_encoder(config.encoding_strategy, config.embedding_dim)?;
+        // Initialize dynamic encoder pool (empty - will create on demand)
+        let encoders = Arc::new(RwLock::new(HashMap::new()));
+
         let reservoir = Arc::new(RwLock::new(
             SimilarityReservoir::new(config.clone())?
         ));
@@ -168,7 +173,7 @@ impl DynamicSimilarityReservoir {
 
         Ok(Self {
             config,
-            encoder,
+            encoders,
             reservoir,
             matcher,
             aof_handle,
@@ -178,6 +183,40 @@ impl DynamicSimilarityReservoir {
             total_additions: std::sync::atomic::AtomicU64::new(0),
             cache_hits: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// Get or create encoder for the given embedding dimension
+    /// This allows DSR to handle multiple models with different embedding sizes
+    async fn get_or_create_encoder(&self, embedding_dim: usize) -> Result<Arc<dyn SpikeEncoder>> {
+        // Fast path: check if encoder already exists
+        {
+            let encoders = self.encoders.read().await;
+            if let Some(encoder) = encoders.get(&embedding_dim) {
+                return Ok(Arc::clone(encoder));
+            }
+        }
+
+        // Slow path: create new encoder (requires write lock)
+        let mut encoders = self.encoders.write().await;
+
+        // Double-check: another thread might have created it
+        if let Some(encoder) = encoders.get(&embedding_dim) {
+            return Ok(Arc::clone(encoder));
+        }
+
+        // Create new encoder for this dimension
+        tracing::info!(
+            "Creating new encoder for embedding_dim={}",
+            embedding_dim
+        );
+
+        let encoder = encoding::create_encoder(
+            self.config.encoding_strategy,
+            embedding_dim
+        )?;
+
+        encoders.insert(embedding_dim, Arc::clone(&encoder));
+        Ok(encoder)
     }
 
     /// Add a new memory with its embedding to the reservoir
@@ -196,8 +235,12 @@ impl DynamicSimilarityReservoir {
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
 
+        // Get or create encoder for this embedding dimension
+        let embedding_dim = embedding.len();
+        let encoder = self.get_or_create_encoder(embedding_dim).await?;
+
         // Encode embedding to spike pattern
-        let spike_pattern = self.encoder.encode(embedding.view())?;
+        let spike_pattern = encoder.encode(embedding.view())?;
 
         // Create similarity well in reservoir
         {
@@ -243,8 +286,12 @@ impl DynamicSimilarityReservoir {
     ) -> Result<SimilarityResults> {
         let start_time = std::time::Instant::now();
 
+        // Get or create encoder for this embedding dimension
+        let embedding_dim = query_embedding.len();
+        let encoder = self.get_or_create_encoder(embedding_dim).await?;
+
         // Encode query to spike pattern
-        let query_spikes = self.encoder.encode(query_embedding.view())?;
+        let query_spikes = encoder.encode(query_embedding.view())?;
 
         // Run similarity matching through reservoir dynamics
         let results = {
