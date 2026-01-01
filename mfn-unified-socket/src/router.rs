@@ -103,8 +103,19 @@ impl LayerRouter {
         }
     }
 
-    async fn handle_layer1(&self, _req: UnifiedRequest) -> Result<UnifiedResponse> {
-        Err(anyhow!("Layer 1 not implemented in unified socket"))
+    async fn handle_layer1(&self, req: UnifiedRequest) -> Result<UnifiedResponse> {
+        match req.request_type.as_str() {
+            "ping" => Ok(UnifiedResponse {
+                response_type: "pong".to_string(),
+                request_id: req.request_id,
+                source_layer: "layer1".to_string(),
+                success: true,
+                data: Some(serde_json::json!({"layer": "Layer 1: SSR", "version": "1.0.0"})),
+                error: None,
+                processing_time_ms: 0.0,
+            }),
+            _ => Err(anyhow!("Layer 1 operation '{}' not implemented in unified socket", req.request_type)),
+        }
     }
 
     async fn handle_layer2(&self, req: UnifiedRequest) -> Result<UnifiedResponse> {
@@ -164,12 +175,34 @@ impl LayerRouter {
         }
     }
 
-    async fn handle_layer3(&self, _req: UnifiedRequest) -> Result<UnifiedResponse> {
-        Err(anyhow!("Layer 3 not implemented in unified socket"))
+    async fn handle_layer3(&self, req: UnifiedRequest) -> Result<UnifiedResponse> {
+        match req.request_type.as_str() {
+            "ping" => Ok(UnifiedResponse {
+                response_type: "pong".to_string(),
+                request_id: req.request_id,
+                source_layer: "layer3".to_string(),
+                success: true,
+                data: Some(serde_json::json!({"layer": "Layer 3: TSR", "version": "1.0.0"})),
+                error: None,
+                processing_time_ms: 0.0,
+            }),
+            _ => Err(anyhow!("Layer 3 operation '{}' not implemented in unified socket", req.request_type)),
+        }
     }
 
-    async fn handle_layer4(&self, _req: UnifiedRequest) -> Result<UnifiedResponse> {
-        Err(anyhow!("Layer 4 not implemented in unified socket"))
+    async fn handle_layer4(&self, req: UnifiedRequest) -> Result<UnifiedResponse> {
+        match req.request_type.as_str() {
+            "ping" => Ok(UnifiedResponse {
+                response_type: "pong".to_string(),
+                request_id: req.request_id,
+                source_layer: "layer4".to_string(),
+                success: true,
+                data: Some(serde_json::json!({"layer": "Layer 4: CPE", "version": "1.0.0"})),
+                error: None,
+                processing_time_ms: 0.0,
+            }),
+            _ => Err(anyhow!("Layer 4 operation '{}' not implemented in unified socket", req.request_type)),
+        }
     }
 
     async fn handle_layer5(&self, req: UnifiedRequest) -> Result<UnifiedResponse> {

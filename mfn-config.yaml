@@ -84,12 +84,12 @@ orchestrator:
     - /memory/context
 
 persistence:
-  base_dir: /usr/lib/alembic/mfn/memory
-  layer1_dir: ${base_dir}/layer1_ifr
-  layer2_dir: ${base_dir}/layer2_dsr
-  layer3_dir: ${base_dir}/layer3_alm
-  layer4_dir: ${base_dir}/layer4_cpe
-  layer5_dir: ${base_dir}/layer5_psr
+  base_dir: /home/persist/neotec/telos/mfn/memory
+  layer1_dir: /home/persist/neotec/telos/mfn/memory/layer1_ifr
+  layer2_dir: /home/persist/neotec/telos/mfn/memory/layer2_dsr
+  layer3_dir: /home/persist/neotec/telos/mfn/memory/layer3_alm
+  layer4_dir: /home/persist/neotec/telos/mfn/memory/layer4_cpe
+  layer5_dir: /home/persist/neotec/telos/mfn/memory/layer5_psr
 
 common_protocol:
   binary_format: true

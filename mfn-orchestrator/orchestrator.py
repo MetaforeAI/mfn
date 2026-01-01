@@ -13,6 +13,136 @@ import numpy as np
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
+# Unified Server Binary Protocol Helper Functions
+
+def send_unified_request(socket_path: str, request_type: str, memory_id: int,
+                        content: str, tags: List[str] = None,
+                        metadata: Dict[str, Any] = None,
+                        embedding: List[float] = None) -> Dict[str, Any]:
+    """Send request using unified binary protocol (4-byte length prefix + JSON)"""
+    # Extract layer number from socket path (e.g., /tmp/mfn_discord_layer1.sock -> "layer1")
+    layer_name = socket_path.split('_')[-1].replace('.sock', '')
+
+    payload = {
+        "memory_id": memory_id,
+        "content": content,
+        "tags": tags or [],
+        "metadata": metadata or {}
+    }
+
+    # Add embedding if provided (required for Layer 2)
+    if embedding is not None:
+        payload["embedding"] = embedding
+
+    request = {
+        "type": request_type,
+        "request_id": f"orch_{int(time.time() * 1000)}",
+        "target_layer": layer_name,
+        "pool_id": "discord_unified",
+        "payload": payload
+    }
+
+    # Encode with 4-byte length prefix
+    json_data = json.dumps(request).encode('utf-8')
+    length_prefix = struct.pack('<I', len(json_data))
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+
+    try:
+        sock.connect(socket_path)
+        sock.sendall(length_prefix + json_data)
+
+        # Read response length prefix
+        response_len_data = sock.recv(4)
+        if len(response_len_data) < 4:
+            return {"success": False, "error": "Invalid response - no length prefix"}
+
+        response_len = struct.unpack('<I', response_len_data)[0]
+
+        # Read response data
+        response_data = b''
+        while len(response_data) < response_len:
+            chunk = sock.recv(response_len - len(response_data))
+            if not chunk:
+                break
+            response_data += chunk
+
+        sock.close()
+
+        if len(response_data) < response_len:
+            return {"success": False, "error": f"Incomplete response: {len(response_data)}/{response_len} bytes"}
+
+        response = json.loads(response_data.decode('utf-8'))
+        return {"success": True, "response": response}
+
+    except Exception as e:
+        sock.close()
+        return {"success": False, "error": str(e)}
+
+def send_unified_query(socket_path: str, query_type: str, content: str = "",
+                      top_k: int = 5, metadata: Dict[str, Any] = None,
+                      embedding: List[float] = None) -> Dict[str, Any]:
+    """Send query request using unified binary protocol"""
+    # Extract layer number from socket path
+    layer_name = socket_path.split('_')[-1].replace('.sock', '')
+
+    payload = {
+        "content": content,
+        "top_k": top_k,
+        "metadata": metadata or {}
+    }
+
+    # Add embedding if provided (for Layer 2 similarity search)
+    if embedding is not None:
+        payload["embedding"] = embedding
+
+    request = {
+        "type": query_type,
+        "request_id": f"orch_{int(time.time() * 1000)}",
+        "target_layer": layer_name,
+        "pool_id": "discord_unified",
+        "payload": payload
+    }
+
+    # Encode with 4-byte length prefix
+    json_data = json.dumps(request).encode('utf-8')
+    length_prefix = struct.pack('<I', len(json_data))
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+
+    try:
+        sock.connect(socket_path)
+        sock.sendall(length_prefix + json_data)
+
+        # Read response length prefix
+        response_len_data = sock.recv(4)
+        if len(response_len_data) < 4:
+            return {"success": False, "error": "Invalid response - no length prefix"}
+
+        response_len = struct.unpack('<I', response_len_data)[0]
+
+        # Read response data
+        response_data = b''
+        while len(response_data) < response_len:
+            chunk = sock.recv(response_len - len(response_data))
+            if not chunk:
+                break
+            response_data += chunk
+
+        sock.close()
+
+        if len(response_data) < response_len:
+            return {"success": False, "error": f"Incomplete response: {len(response_data)}/{response_len} bytes"}
+
+        response = json.loads(response_data.decode('utf-8'))
+        return {"success": True, "response": response}
+
+    except Exception as e:
+        sock.close()
+        return {"success": False, "error": str(e)}
+
 @dataclass
 class MemoryFlowResult:
     """Result of a complete memory flow operation"""
@@ -221,39 +351,44 @@ class MFNOrchestrator:
             return {"success": False, "error": str(e)}
     
     def _add_to_layer1(self, content: str, memory_id: Optional[int]) -> Dict[str, Any]:
-        """Add memory to Layer 1 via Unix socket"""
-        return self._send_unix_socket_message('layer1', {
-            "type": "add_memory",
-            "request_id": f"orch_add_{int(time.time())}",
-            "content": content
-        })
+        """Add memory to Layer 1 via unified binary protocol"""
+        socket_path = self.layer_configs['layer1']['socket']
+        return send_unified_request(
+            socket_path=socket_path,
+            request_type="add_memory",
+            memory_id=memory_id or 0,
+            content=content,
+            tags=[],
+            metadata={}
+        )
     
     def _add_to_layer2(self, content: str, memory_id: Optional[int]) -> Dict[str, Any]:
-        """Add memory to Layer 2 via Unix socket (if running)"""
+        """Add memory to Layer 2 via unified binary protocol"""
+        socket_path = self.layer_configs['layer2']['socket']
         # Generate embedding for the content
         embedding = self._text_to_embedding(content)
 
-        # Use binary protocol for Layer 2
-        return self._send_binary_socket_message('layer2', {
-            "type": "AddMemory",
-            "request_id": f"orch_add_{int(time.time())}",
-            "memory_id": memory_id or 0,
-            "embedding": embedding,
-            "content": content,
-            "tags": None,
-            "metadata": None
-        })
+        return send_unified_request(
+            socket_path=socket_path,
+            request_type="add_memory",
+            memory_id=memory_id or 0,
+            content=content,
+            tags=[],
+            metadata={},
+            embedding=embedding
+        )
     
     def _add_to_layer4(self, memory_id: Optional[int], content: str, context: List[str]) -> Dict[str, Any]:
-        """Add memory context to Layer 4 via Unix socket"""
-        # Layer 4 also uses binary protocol
-        return self._send_binary_socket_message('layer4', {
-            "type": "AddMemoryContext",
-            "request_id": f"orch_ctx_{int(time.time())}",
-            "memory_id": memory_id or 0,
-            "content": content,
-            "context": context
-        })
+        """Add memory context to Layer 4 via unified binary protocol"""
+        socket_path = self.layer_configs['layer4']['socket']
+        return send_unified_request(
+            socket_path=socket_path,
+            request_type="add_memory",
+            memory_id=memory_id or 0,
+            content=content,
+            tags=context,
+            metadata={"context": context}
+        )
     
     def _text_to_embedding(self, text: str) -> List[float]:
         """Convert text to embedding vector for Layer 2.
@@ -268,27 +403,29 @@ class MFNOrchestrator:
         return embedding.tolist()
 
     def _query_layer1(self, query: str) -> Dict[str, Any]:
-        """Query Layer 1 for exact matches"""
-        return self._send_unix_socket_message('layer1', {
-            "type": "query",
-            "request_id": f"orch_query_{int(time.time())}",
-            "content": query
-        })
+        """Query Layer 1 for exact matches via unified protocol"""
+        socket_path = self.layer_configs['layer1']['socket']
+        return send_unified_query(
+            socket_path=socket_path,
+            query_type="query",
+            content=query,
+            top_k=1
+        )
 
     def _query_layer2(self, query: str, max_results: int) -> Dict[str, Any]:
-        """Query Layer 2 for similarity search"""
+        """Query Layer 2 for similarity search via unified protocol"""
+        socket_path = self.layer_configs['layer2']['socket']
         # Convert query text to embedding
         query_embedding = self._text_to_embedding(query)
 
-        # Use binary protocol for Layer 2
-        return self._send_binary_socket_message('layer2', {
-            "type": "SimilaritySearch",
-            "request_id": f"orch_sim_{int(time.time())}",
-            "query_embedding": query_embedding,
-            "top_k": max_results,
-            "min_confidence": 0.5,
-            "timeout_ms": 5000
-        })
+        return send_unified_query(
+            socket_path=socket_path,
+            query_type="query",
+            content=query,
+            top_k=max_results,
+            metadata={"min_confidence": 0.5},
+            embedding=query_embedding
+        )
     
     def _query_layer3(self, query: str, max_results: int) -> Dict[str, Any]:
         """Query Layer 3 via HTTP API"""
@@ -311,14 +448,15 @@ class MFNOrchestrator:
             return {"success": False, "error": str(e)}
             
     def _predict_layer4(self, context: List[str], sequence_length: int) -> Dict[str, Any]:
-        """Get context predictions from Layer 4"""
-        # Layer 4 also uses binary protocol like Layer 2
-        return self._send_binary_socket_message('layer4', {
-            "type": "PredictContext",
-            "request_id": f"orch_pred_{int(time.time())}",
-            "current_context": context,
-            "sequence_length": sequence_length
-        })
+        """Get context predictions from Layer 4 via unified protocol"""
+        socket_path = self.layer_configs['layer4']['socket']
+        return send_unified_query(
+            socket_path=socket_path,
+            query_type="predict",
+            content=" ".join(context),
+            top_k=sequence_length,
+            metadata={"current_context": context}
+        )
     
     def _send_unix_socket_message(self, layer: str, message: Dict[str, Any]) -> Dict[str, Any]:
         """Send message to Unix socket and return response (text protocol)"""
