@@ -27,7 +27,7 @@ pub const Config = struct {
 
     pub fn default(allocator: std.mem.Allocator) !Config {
         return Config{
-            .data_dir = try allocator.dupe(u8, "/usr/lib/alembic/mfn/memory/layer1_ifr"),
+            .data_dir = try allocator.dupe(u8, "/usr/lib/neotec/telos/mfn/memory/layer1_ifr"),
             .pool_id = try allocator.dupe(u8, "default"),
             .fsync_interval_ms = 1000,
             .snapshot_interval_secs = 300,

@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create persistence config
     let persistence_config = PersistenceConfig {
-        data_dir: PathBuf::from("/usr/lib/alembic/mfn/memory/layer5_psr"),
+        data_dir: PathBuf::from("/usr/lib/neotec/telos/mfn/memory/layer5_psr"),
         pool_id: "crucible_training".to_string(),
         fsync_interval_ms: 1000,
         snapshot_interval_secs: 300,

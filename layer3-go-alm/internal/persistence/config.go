@@ -33,7 +33,7 @@ type Config struct {
 // DefaultConfig returns default persistence configuration for Layer 3
 func DefaultConfig() *Config {
 	return &Config{
-		DataDir:              "/usr/lib/alembic/mfn/memory/layer3_alm",
+		DataDir:              "/usr/lib/neotec/telos/mfn/memory/layer3_alm",
 		PoolID:               "default",
 		FsyncIntervalMs:      1000,
 		SnapshotIntervalSecs: 300,

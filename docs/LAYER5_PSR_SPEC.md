@@ -251,7 +251,7 @@ struct Predicate {
 
 ### On-Disk Persistence
 - Format: MessagePack or bincode for efficiency
-- Location: `/usr/lib/alembic/mfn/psr.db`
+- Location: `/usr/lib/neotec/telos/mfn/memory/layer5_psr/`
 - Backup: Incremental snapshots
 
 ## Integration with APEX

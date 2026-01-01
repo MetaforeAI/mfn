@@ -1,0 +1,80 @@
+# Recommended MFN Configuration for Improved Semantic Search
+#
+# This configuration addresses the semantic search inconsistency issues
+# identified in MFN_SEMANTIC_SEARCH_ANALYSIS.md
+#
+# Apply these settings to improve recall without sacrificing too much precision
+
+[layer2_dsr]
+# Lower similarity threshold from 0.7 to 0.6
+# This allows more semantic variations to match
+similarity_threshold = 0.6
+
+# Reduce competition strength to allow more similar memories to surface
+# Default was 0.9, which was too aggressive
+competition_strength = 0.75
+
+# Integration window can stay the same
+integration_window_ms = 10.0
+
+# Embedding configuration
+embedding_dim = 384  # For all-MiniLM-L6-v2
+
+# Consider using temporal coding for better precision
+# encoding_strategy = "TemporalCoding"  # Instead of RateCoding
+
+[layer2_dynamics]
+# Reduce lateral inhibition to prevent over-suppression
+# These would need to be added to the SimilarityMatcher configuration
+inhibition_strength = 0.5  # Was 0.8
+winner_boost = 1.1  # Was 1.2, slightly less aggressive
+competition_decay = 0.97  # Was 0.95, slower decay
+
+[embedding_service]
+# Consider upgrading to a better model for improved semantics
+# model_name = "sentence-transformers/all-MiniLM-L12-v2"  # Better semantic understanding
+# OR
+# model_name = "sentence-transformers/all-mpnet-base-v2"  # Even better, but slower
+
+# Current model (keep for now, upgrade later if needed)
+model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Enable normalization for consistent similarity scores
+normalize = true
+
+# Batching configuration
+enable_batching = true
+batch_size = 16
+
+[orchestrator]
+# Enable adaptive thresholding based on result count
+# If fewer than min_results, progressively lower threshold
+enable_adaptive_threshold = true
+min_results = 3
+adaptive_threshold_min = 0.5
+adaptive_threshold_max = 0.7
+adaptive_threshold_step = 0.05
+
+[experimental]
+# Future improvements to consider
+
+# Enable query expansion at MFN level
+# This would move the synonym expansion from bot to MFN
+enable_query_expansion = false  # Set to true when implemented
+
+# Enable hybrid search (semantic + keyword)
+# This would combine embedding similarity with keyword matching
+enable_hybrid_search = false  # Set to true when implemented
+
+# Use multiple encoding strategies and ensemble
+enable_ensemble_encoding = false  # Set to true when implemented
+
+[monitoring]
+# Track these metrics to evaluate improvements
+track_similarity_scores = true
+log_below_threshold = true  # Log queries that fall just below threshold
+similarity_score_histogram_buckets = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+# Track recall and precision
+track_recall_metrics = true
+track_precision_metrics = true

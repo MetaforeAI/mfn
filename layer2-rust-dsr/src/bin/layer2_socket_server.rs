@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     println!("🗂️  Multi-Pool: Enabled (client-side pool selection)");
 
     // Create pool manager
-    let data_dir = PathBuf::from("/usr/lib/alembic/mfn/memory/layer2_dsr");
+    let data_dir = PathBuf::from("/usr/lib/neotec/telos/mfn/memory/layer2_dsr");
     std::fs::create_dir_all(&data_dir)?;
 
     let config = DSRConfig::default();

@@ -42,7 +42,7 @@ pub struct PersistenceConfig {
 impl Default for PersistenceConfig {
     fn default() -> Self {
         Self {
-            data_dir: PathBuf::from("/usr/lib/alembic/mfn/memory/layer2_dsr"),
+            data_dir: PathBuf::from("/usr/lib/neotec/telos/mfn/memory/layer2_dsr"),
             pool_id: "default".to_string(),
             fsync_interval_ms: 1000,
             snapshot_interval_secs: 300,

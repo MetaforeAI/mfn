@@ -110,11 +110,12 @@ async fn run_socket_server(
         let layer_id = layer_id.to_string();
 
         tokio::spawn(async move {
-            let mut buf = vec![0u8; 8192];
+            let mut read_buf = vec![0u8; 8192];
+            let mut message_buf = Vec::new();
 
             loop {
                 // Read from socket
-                let n = match stream.read(&mut buf).await {
+                let n = match stream.read(&mut read_buf).await {
                     Ok(0) => break, // Connection closed
                     Ok(n) => n,
                     Err(e) => {
@@ -123,8 +124,11 @@ async fn run_socket_server(
                     }
                 };
 
-                // Decode binary message
-                let (message, _consumed) = match BinaryProtocol::decode(&buf[..n]) {
+                // Append to message buffer
+                message_buf.extend_from_slice(&read_buf[..n]);
+
+                // Try to decode binary message
+                let (message, consumed) = match BinaryProtocol::decode(&message_buf) {
                     Ok(Some(msg)) => msg,
                     Ok(None) => continue, // Need more data
                     Err(e) => {
@@ -132,6 +136,9 @@ async fn run_socket_server(
                         break;
                     }
                 };
+
+                // Remove consumed bytes from buffer
+                message_buf.drain(..consumed);
 
                 // Parse request
                 let mut request: UnifiedRequest = match serde_json::from_slice(&message) {

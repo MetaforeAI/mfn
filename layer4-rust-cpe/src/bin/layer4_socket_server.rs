@@ -413,7 +413,7 @@ async fn main() -> Result<()> {
     println!("🔗 Socket: /tmp/mfn_discord_layer4.sock");
 
     // Create data directory for all pools
-    let data_dir = PathBuf::from("/usr/lib/alembic/mfn/memory/layer4_cpe");
+    let data_dir = PathBuf::from("/usr/lib/neotec/telos/mfn/memory/layer4_cpe");
     std::fs::create_dir_all(&data_dir)?;
     println!("💾 Multi-pool persistence enabled: {}", data_dir.display());
     println!("📦 Default pool: crucible_training");

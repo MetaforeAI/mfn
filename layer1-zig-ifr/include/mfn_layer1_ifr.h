@@ -13,7 +13,7 @@
  * - Performance monitoring
  * - Cross-language compatibility
  * 
- * Socket Path: /tmp/mfn_layer1.sock
+ * Socket Path: /tmp/mfn_discord_layer1.sock
  * Protocols: JSON (compatibility) + Binary (performance)
  */
 
@@ -41,7 +41,7 @@ extern "C" {
 // Constants
 // ============================================================================
 
-#define MFN_LAYER1_SOCKET_PATH "/tmp/mfn_layer1.sock"
+#define MFN_LAYER1_SOCKET_PATH "/tmp/mfn_discord_layer1.sock"
 #define MFN_LAYER1_MAX_CONTENT_SIZE (1024 * 1024)  // 1MB max content size
 #define MFN_LAYER1_MAX_MEMORY_DATA_SIZE (1024 * 1024)  // 1MB max memory data size
 

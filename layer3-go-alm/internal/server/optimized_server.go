@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -130,6 +131,7 @@ func (s *OptimizedServer) setupOptimizedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/search", s.handleSearchOptimized)
 	mux.HandleFunc("/search/associative", s.handleAssociativeSearchOptimized)
 	mux.HandleFunc("/search/batch", s.handleBatchSearchOptimized)
+	mux.HandleFunc("/search/text", s.handleTextSearchOptimized)
 	
 	// Graph operations with caching
 	mux.HandleFunc("/graph/stats", s.handleGraphStatsOptimized)
@@ -365,6 +367,76 @@ func (s *OptimizedServer) handleBatchSearchOptimized(w http.ResponseWriter, r *h
 // handleAssociativeSearchOptimized provides optimized associative search
 func (s *OptimizedServer) handleAssociativeSearchOptimized(w http.ResponseWriter, r *http.Request) {
 	s.handleSearchOptimized(w, r) // Delegate to optimized search
+}
+
+// handleTextSearchOptimized provides text-based search for memories
+func (s *OptimizedServer) handleTextSearchOptimized(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Query      string `json:"q"`
+		MaxResults int    `json:"limit"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		atomic.AddInt64(&s.totalErrors, 1)
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate and set defaults
+	if req.Query == "" {
+		http.Error(w, "Query parameter 'q' is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.MaxResults <= 0 {
+		req.MaxResults = 5
+	} else if req.MaxResults > 100 {
+		req.MaxResults = 100 // Cap at 100 for performance
+	}
+
+	// Get all memories from graph
+	memories := s.alm.GetGraph().GetAllMemories()
+	queryLower := strings.ToLower(req.Query)
+
+	// Filter memories by content matching
+	var results []*alm.Memory
+	for _, mem := range memories {
+		if strings.Contains(strings.ToLower(mem.Content), queryLower) {
+			results = append(results, mem)
+		}
+	}
+
+	// Sort by timestamp descending (newest first)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].CreatedAt.After(results[j].CreatedAt)
+	})
+
+	// Apply limit after sorting
+	if len(results) > req.MaxResults {
+		results = results[:req.MaxResults]
+	}
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "max-age=10") // Short cache for text search
+
+	// Return response
+	response := map[string]interface{}{
+		"results": results,
+		"count":   len(results),
+		"query":   req.Query,
+		"limit":   req.MaxResults,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		atomic.AddInt64(&s.totalErrors, 1)
+		return
+	}
 }
 
 // handleMemoriesOptimized handles memory operations with caching
@@ -648,6 +720,7 @@ func (s *OptimizedServer) handleRootOptimized(w http.ResponseWriter, r *http.Req
 			"GET /memories/{id}":         "Get specific memory (cached)",
 			"POST /associations":         "Add a new association",
 			"POST /search/associative":   "Perform associative search (cached)",
+			"POST /search/text":          "Text-based content search",
 			"POST /search/batch":         "Batch search operations",
 			"GET /graph/stats":           "Get graph statistics (cached)",
 			"GET /graph/neighbors/{id}":  "Get memory neighbors (cached)",
