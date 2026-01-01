@@ -10,10 +10,12 @@ license = "MIT"
 members = [
     "layer2-rust-dsr",
     "layer4-rust-cpe",
+    "layer5-rust-psr",
     "mfn-core",
     "mfn-integration",
     "mfn-binary-protocol",
-    "mfn-monolith", "layer5-rust-psr",
+    "mfn-monolith",
+    "mfn-unified-socket",
 ]
 exclude = ["lmdb-benchmark"]
 

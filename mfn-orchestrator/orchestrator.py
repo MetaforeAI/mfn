@@ -8,6 +8,8 @@ import socket
 import json
 import time
 import requests
+import struct
+import numpy as np
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
@@ -28,12 +30,12 @@ class MFNOrchestrator:
         self.layer_configs = {
             'layer1': {
                 'type': 'unix_socket',
-                'socket': '/tmp/mfn_layer1.sock',
+                'socket': '/tmp/mfn_discord_layer1.sock',
                 'description': 'Immediate Flow Registry - Exact matching'
             },
             'layer2': {
-                'type': 'unix_socket', 
-                'socket': '/tmp/mfn_layer2.sock',
+                'type': 'unix_socket',
+                'socket': '/tmp/mfn_discord_layer2.sock',
                 'description': 'Dynamic Similarity Reservoir - Similarity search'
             },
             'layer3': {
@@ -43,7 +45,7 @@ class MFNOrchestrator:
             },
             'layer4': {
                 'type': 'unix_socket',
-                'socket': '/tmp/mfn_layer4.sock', 
+                'socket': '/tmp/mfn_discord_layer4.sock',
                 'description': 'Context Prediction Engine - Temporal patterns'
             }
         }
@@ -228,16 +230,24 @@ class MFNOrchestrator:
     
     def _add_to_layer2(self, content: str, memory_id: Optional[int]) -> Dict[str, Any]:
         """Add memory to Layer 2 via Unix socket (if running)"""
-        return self._send_unix_socket_message('layer2', {
+        # Generate embedding for the content
+        embedding = self._text_to_embedding(content)
+
+        # Use binary protocol for Layer 2
+        return self._send_binary_socket_message('layer2', {
             "type": "AddMemory",
             "request_id": f"orch_add_{int(time.time())}",
+            "memory_id": memory_id or 0,
+            "embedding": embedding,
             "content": content,
-            "memory_id": memory_id or 0
+            "tags": None,
+            "metadata": None
         })
     
     def _add_to_layer4(self, memory_id: Optional[int], content: str, context: List[str]) -> Dict[str, Any]:
         """Add memory context to Layer 4 via Unix socket"""
-        return self._send_unix_socket_message('layer4', {
+        # Layer 4 also uses binary protocol
+        return self._send_binary_socket_message('layer4', {
             "type": "AddMemoryContext",
             "request_id": f"orch_ctx_{int(time.time())}",
             "memory_id": memory_id or 0,
@@ -245,6 +255,18 @@ class MFNOrchestrator:
             "context": context
         })
     
+    def _text_to_embedding(self, text: str) -> List[float]:
+        """Convert text to embedding vector for Layer 2.
+        For now, using a simple hash-based approach.
+        In production, this would use a proper embedding model."""
+        # Simple hash-based embedding for testing
+        # Creates a 768-dimensional vector (matching typical BERT embeddings)
+        np.random.seed(hash(text) % (2**32))
+        embedding = np.random.randn(768).astype(np.float32)
+        # Normalize to unit vector
+        embedding = embedding / np.linalg.norm(embedding)
+        return embedding.tolist()
+
     def _query_layer1(self, query: str) -> Dict[str, Any]:
         """Query Layer 1 for exact matches"""
         return self._send_unix_socket_message('layer1', {
@@ -252,27 +274,37 @@ class MFNOrchestrator:
             "request_id": f"orch_query_{int(time.time())}",
             "content": query
         })
-        
+
     def _query_layer2(self, query: str, max_results: int) -> Dict[str, Any]:
         """Query Layer 2 for similarity search"""
-        return self._send_unix_socket_message('layer2', {
+        # Convert query text to embedding
+        query_embedding = self._text_to_embedding(query)
+
+        # Use binary protocol for Layer 2
+        return self._send_binary_socket_message('layer2', {
             "type": "SimilaritySearch",
             "request_id": f"orch_sim_{int(time.time())}",
-            "query": query,
-            "top_k": max_results
+            "query_embedding": query_embedding,
+            "top_k": max_results,
+            "min_confidence": 0.5,
+            "timeout_ms": 5000
         })
     
     def _query_layer3(self, query: str, max_results: int) -> Dict[str, Any]:
         """Query Layer 3 via HTTP API"""
         try:
-            response = requests.get(
+            # Layer 3 search requires POST method
+            response = requests.post(
                 f"{self.layer_configs['layer3']['base_url']}/search",
-                params={"q": query, "limit": max_results},
+                json={"q": query, "limit": max_results},
                 timeout=5
             )
-            
+
             if response.status_code == 200:
-                return {"success": True, "results": response.json()}
+                result = response.json()
+                # Extract actual memory results from search response
+                memories = result.get('results', [])
+                return {"success": True, "results": memories}
             else:
                 return {"success": False, "error": f"HTTP {response.status_code}"}
         except Exception as e:
@@ -280,7 +312,8 @@ class MFNOrchestrator:
             
     def _predict_layer4(self, context: List[str], sequence_length: int) -> Dict[str, Any]:
         """Get context predictions from Layer 4"""
-        return self._send_unix_socket_message('layer4', {
+        # Layer 4 also uses binary protocol like Layer 2
+        return self._send_binary_socket_message('layer4', {
             "type": "PredictContext",
             "request_id": f"orch_pred_{int(time.time())}",
             "current_context": context,
@@ -288,23 +321,64 @@ class MFNOrchestrator:
         })
     
     def _send_unix_socket_message(self, layer: str, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Send message to Unix socket and return response"""
+        """Send message to Unix socket and return response (text protocol)"""
         try:
             socket_path = self.layer_configs[layer]['socket']
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(5.0)
             sock.connect(socket_path)
-            
-            # Send JSON message
+
+            # Send JSON message with newline (text protocol)
             message_json = json.dumps(message) + '\n'
             sock.send(message_json.encode())
-            
+
             # Receive response
             response = sock.recv(4096).decode().strip()
             sock.close()
-            
+
             return {"success": True, "response": json.loads(response)}
-            
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _send_binary_socket_message(self, layer: str, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Send message to Unix socket using binary protocol (4-byte length prefix + JSON)"""
+        try:
+            socket_path = self.layer_configs[layer]['socket']
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect(socket_path)
+
+            # Prepare JSON message
+            message_json = json.dumps(message).encode('utf-8')
+            message_len = len(message_json)
+
+            # Send length prefix (4 bytes, little-endian) + JSON
+            sock.send(struct.pack('<I', message_len))
+            sock.send(message_json)
+
+            # Receive response (also with 4-byte length prefix)
+            len_bytes = sock.recv(4)
+            if len(len_bytes) < 4:
+                sock.close()
+                return {"success": False, "error": "Invalid response - no length prefix"}
+
+            response_len = struct.unpack('<I', len_bytes)[0]
+            response_data = b''
+            while len(response_data) < response_len:
+                chunk = sock.recv(min(4096, response_len - len(response_data)))
+                if not chunk:
+                    break
+                response_data += chunk
+
+            sock.close()
+
+            if len(response_data) < response_len:
+                return {"success": False, "error": f"Incomplete response: got {len(response_data)}/{response_len} bytes"}
+
+            response = json.loads(response_data.decode('utf-8'))
+            return {"success": True, "response": response}
+
         except Exception as e:
             return {"success": False, "error": str(e)}
 

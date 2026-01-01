@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("🧠 Starting Layer 2 DSR Socket Server (Multi-Pool)");
     println!("🎯 Target: <2ms similarity search latency");
-    println!("🔗 Socket: /tmp/mfn_layer2.sock");
+    println!("🔗 Socket: /tmp/mfn_discord_layer2.sock");
     println!("🗂️  Multi-Pool: Enabled (client-side pool selection)");
 
     // Create pool manager
@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create server configuration
     let server_config = SocketServerConfig {
-        socket_path: "/tmp/mfn_layer2.sock".to_string(),
+        socket_path: "/tmp/mfn_discord_layer2.sock".to_string(),
         max_connections: 200,
         connection_timeout_ms: 30000,
         enable_binary_protocol: true,
@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     let mut server = SocketServer::new_with_pool_manager(pool_manager, Some(server_config));
 
     println!("✅ Server ready! Press Ctrl+C to shutdown gracefully");
-    println!("🧠 Layer 2 DSR socket server listening on /tmp/mfn_layer2.sock");
+    println!("🧠 Layer 2 DSR socket server listening on /tmp/mfn_discord_layer2.sock");
     println!("🔮 Protocol support - Binary: true, JSON: true");
 
     // Handle graceful shutdown

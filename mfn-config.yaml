@@ -1,0 +1,101 @@
+# MFN Unified Configuration
+# Single source of truth for all layer socket paths and settings
+
+project: discord
+socket_prefix: mfn_discord
+
+layers:
+  layer1:
+    name: "IFR - Immediate Flow Registry"
+    language: zig
+    socket_path: /tmp/mfn_discord_layer1.sock
+    port: null
+    protocol: binary
+    operations:
+      - ping
+      - add_memory
+      - exact_match
+      - bloom_check
+      - health_check
+
+  layer2:
+    name: "DSR - Dynamic Similarity Reservoir"
+    language: rust
+    socket_path: /tmp/mfn_discord_layer2.sock
+    port: null
+    protocol: binary
+    operations:
+      - ping
+      - add_memory
+      - similarity_search
+      - optimize_reservoir
+      - get_stats
+      - health_check
+
+  layer3:
+    name: "ALM - Associative Link Mesh"
+    language: go
+    socket_path: /tmp/mfn_discord_layer3.sock
+    port: 8082
+    protocol: binary
+    operations:
+      - ping
+      - add_memory
+      - add_association
+      - search
+      - get_stats
+      - health_check
+
+  layer4:
+    name: "CPE - Context Prediction Engine"
+    language: rust
+    socket_path: /tmp/mfn_discord_layer4.sock
+    port: null
+    protocol: binary
+    operations:
+      - ping
+      - add_memory_context
+      - predict_context
+      - get_context_history
+      - health_check
+      - list_pools
+
+  layer5:
+    name: "PSR - Pattern Structure Registry"
+    language: rust
+    socket_path: /tmp/mfn_discord_layer5.sock
+    port: null
+    protocol: binary
+    operations:
+      - ping
+      - add_pattern
+      - similarity_search
+      - get_pattern
+      - health_check
+
+orchestrator:
+  host: 0.0.0.0
+  port: 11332
+  protocol: http
+  endpoints:
+    - /health
+    - /memory/add
+    - /memory/query
+    - /memory/context
+
+persistence:
+  base_dir: /usr/lib/alembic/mfn/memory
+  layer1_dir: ${base_dir}/layer1_ifr
+  layer2_dir: ${base_dir}/layer2_dsr
+  layer3_dir: ${base_dir}/layer3_alm
+  layer4_dir: ${base_dir}/layer4_cpe
+  layer5_dir: ${base_dir}/layer5_psr
+
+common_protocol:
+  binary_format: true
+  length_prefix_bytes: 4
+  byte_order: little_endian
+  json_payload: true
+  max_message_size: 10485760  # 10MB
+  connection_timeout_ms: 30000
+  max_connections: 200

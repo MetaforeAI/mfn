@@ -410,7 +410,7 @@ async fn main() -> Result<()> {
 
     println!("🧠 Starting Layer 4 CPE Socket Server (Multi-Pool)");
     println!("🎯 Target: Context prediction and temporal analysis");
-    println!("🔗 Socket: /tmp/mfn_layer4.sock");
+    println!("🔗 Socket: /tmp/mfn_discord_layer4.sock");
 
     // Create data directory for all pools
     let data_dir = PathBuf::from("/usr/lib/alembic/mfn/memory/layer4_cpe");
@@ -423,7 +423,7 @@ async fn main() -> Result<()> {
     let pool_manager = Arc::new(PoolManager::new(data_dir, config));
 
     // Remove existing socket file
-    let socket_path = "/tmp/mfn_layer4.sock";
+    let socket_path = "/tmp/mfn_discord_layer4.sock";
     if std::path::Path::new(socket_path).exists() {
         std::fs::remove_file(socket_path)?;
     }

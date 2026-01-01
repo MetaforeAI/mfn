@@ -5,7 +5,7 @@
 //! 
 //! Target Performance:
 //! - Binary protocol: <1ms operation latency
-//! - Socket path: /tmp/mfn_layer2.sock
+//! - Socket path: /tmp/mfn_discord_layer2.sock
 //! - Concurrent connection handling
 //! - Zero-downtime migration compatibility
 
@@ -26,7 +26,7 @@ use crate::{
 };
 
 /// Default socket path for Layer 2 DSR
-pub const DEFAULT_SOCKET_PATH: &str = "/tmp/mfn_layer2.sock";
+pub const DEFAULT_SOCKET_PATH: &str = "/tmp/mfn_discord_layer2.sock";
 
 /// Socket server configuration
 #[derive(Debug, Clone)]

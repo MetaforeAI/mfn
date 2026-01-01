@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	DefaultSocketPath = "/tmp/mfn_layer3.sock"
+	DefaultSocketPath = "/tmp/mfn_discord_layer3.sock"
 	MaxConnections    = 200 // Increased for high-concurrency stress tests
 	BufferSize        = 8192
 	RequestTimeout    = 30 * time.Second

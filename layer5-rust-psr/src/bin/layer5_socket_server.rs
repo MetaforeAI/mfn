@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("🧠 Starting Layer 5 PSR Socket Server");
     println!("🎯 Target: <1ms pattern storage, <5ms similarity search");
-    println!("🔗 Socket: /tmp/mfn_layer5.sock");
+    println!("🔗 Socket: /tmp/mfn_discord_layer5.sock");
 
     // Create persistence config
     let persistence_config = PersistenceConfig {
