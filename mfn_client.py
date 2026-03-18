@@ -181,13 +181,13 @@ class MFNClient:
         self._request_counter = 0
         self._counter_lock = threading.Lock()
 
-        # Socket paths for each layer (Crucible uses mfn_crucible prefix)
+        # Socket paths for each layer
         self.layer_sockets = {
-            1: f"{socket_base_path}/mfn_crucible_layer1.sock",
-            2: f"{socket_base_path}/mfn_crucible_layer2.sock",
-            3: f"{socket_base_path}/mfn_crucible_layer3.sock",
-            4: f"{socket_base_path}/mfn_crucible_layer4.sock",
-            5: f"{socket_base_path}/mfn_crucible_layer5.sock",
+            1: f"{socket_base_path}/mfn_test_layer1.sock",
+            2: f"{socket_base_path}/mfn_test_layer2.sock",
+            3: f"{socket_base_path}/mfn_test_layer3.sock",
+            4: f"{socket_base_path}/mfn_test_layer4.sock",
+            5: f"{socket_base_path}/mfn_test_layer5.sock",
         }
 
         # Bounded connection pools: each layer gets a pool of reusable

@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-MFN_DIR="/home/persist/repos/mfn-system"
+MFN_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 LAYER3_BINARY="${MFN_DIR}/layer3-go-alm/layer3_alm"
 TEST_SCRIPT="${MFN_DIR}/comprehensive_1000qps_test.py"
 OPTIMIZED_CLIENT="${MFN_DIR}/optimized_mfn_client.py"

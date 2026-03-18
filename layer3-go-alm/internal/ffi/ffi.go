@@ -68,7 +68,7 @@ type AddAssociationRequest struct {
 func NewFFIServer(almInstance *alm.ALM) *FFIServer {
 	return &FFIServer{
 		alm:        almInstance,
-		socketPath: "/tmp/mfn_discord_layer3.sock",
+		socketPath: "/tmp/mfn_test_layer3.sock",
 	}
 }
 

@@ -523,10 +523,12 @@ impl TemporalAnalyzer {
                 break;
             }
 
+            // Build n-gram in chronological order (oldest to newest)
+            // so that prefix matching can predict the NEXT element
+            let window_len = self.access_window.len();
             let ngram: Vec<MemoryId> = self.access_window
                 .iter()
-                .rev()
-                .take(n)
+                .skip(window_len.saturating_sub(n))
                 .map(|a| a.memory_id)
                 .collect();
 
@@ -883,24 +885,27 @@ impl TemporalAnalyzer {
         if let Some(recent_sequence) = context.recent_sequence.as_ref() {
             for n in (2..=self.config.max_ngram_length).rev() {
                 if recent_sequence.len() >= n - 1 {
+                    // Build prefix in chronological order (last n-1 elements of recent sequence)
                     let prefix: Vec<MemoryId> = recent_sequence
                         .iter()
-                        .rev()
-                        .take(n - 1)
+                        .skip(recent_sequence.len().saturating_sub(n - 1))
                         .cloned()
                         .collect();
 
                     if let Some(frequencies) = self.ngram_frequencies.get(&n) {
                         for (ngram, freq_data) in frequencies {
-                            // Only use n-grams with sufficient frequency
-                            if freq_data.count < MIN_FREQUENCY_THRESHOLD {
+                            // Use count >= 1 for predictions (MIN_FREQUENCY_THRESHOLD
+                            // guards n-gram storage, not prediction eligibility).
+                            // Even a single observed sequence is useful for prediction.
+                            if freq_data.count < 1 {
                                 continue;
                             }
 
-                            if ngram.starts_with(&prefix) && ngram.len() == prefix.len() + 1 {
-                                let next_memory = ngram[prefix.len()];
+                            if ngram.len() == n && ngram[..n-1] == prefix[..] {
+                                let next_memory = ngram[n - 1];
+                                let total = self.calculate_total_ngram_count(n).max(1);
                                 let confidence = (freq_data.count as f64 /
-                                    self.calculate_total_ngram_count(n) as f64).min(1.0);
+                                    total as f64).min(1.0);
 
                                 predictions.push(PredictionResult {
                                     memory_id: next_memory,
@@ -1240,6 +1245,11 @@ impl TemporalAnalyzer {
         self.matcher.active_matches.clear();
         self.matcher.completed_matches.clear();
         self.connection_patterns.clear();
+    }
+
+    /// Return the recent memory IDs from the access window in chronological order.
+    pub fn recent_memory_ids(&self) -> Vec<MemoryId> {
+        self.access_window.iter().map(|a| a.memory_id).collect()
     }
 
     /// Get memory usage statistics

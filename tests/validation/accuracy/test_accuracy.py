@@ -269,7 +269,7 @@ def show_usage_guide():
     print("=" * 40)
     
     print("1. START THE SYSTEM:")
-    print("   cd /home/persist/repos/mfn-system")
+    print("   cd <project-root>")
     print("   ./start_layers.sh  # Start all layers")
     
     print("\n2. PYTHON API USAGE:")

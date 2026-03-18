@@ -7,7 +7,7 @@
 //! - **Storage**: In-memory HashMap with persistence via AOF + LMDB snapshots
 //! - **Search**: Linear scan similarity search (HNSW integration pending)
 //! - **Composition**: Track pattern relationships (P ∘ Q)
-//! - **Socket**: `/tmp/mfn_discord_layer5.sock` with binary protocol
+//! - **Socket**: `/tmp/mfn_test_layer5.sock` with binary protocol
 //!
 //! # Performance Targets
 //!

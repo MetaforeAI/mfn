@@ -226,6 +226,35 @@ impl ContextPredictionLayer {
         metrics.context_window_size = window.len();
     }
 
+    /// Predict next memories based on recent access window.
+    /// This bypasses the MfnLayer::search() interface to directly use the
+    /// temporal analyzer with the actual access history, which is the correct
+    /// path for the socket server's PredictContext requests.
+    pub async fn predict_from_recent(
+        &self,
+        max_predictions: usize,
+    ) -> Vec<crate::temporal::PredictionResult> {
+        let analyzer = self.analyzer.lock().await;
+
+        // Build recent_sequence from the access window inside the analyzer
+        let recent_ids = analyzer.recent_memory_ids();
+
+        if recent_ids.is_empty() {
+            return Vec::new();
+        }
+
+        let context = PredictionContext {
+            recent_sequence: Some(recent_ids),
+            current_timestamp: current_timestamp(),
+            user_context: None,
+            session_id: None,
+            max_predictions,
+            connection_id: None,
+        };
+
+        analyzer.predict_next(&context)
+    }
+
     /// Clean up connection resources
     pub async fn cleanup_connection(&self, conn_id: &str) {
         let mut analyzer = self.analyzer.lock().await;
@@ -610,11 +639,16 @@ impl MfnLayer for ContextPredictionLayer {
         }
 
         // CPE provides predictions rather than direct search results
-        // Convert query into context for prediction
-        let recent_sequence = if query.start_memory_ids.is_empty() {
-            None
-        } else {
+        // Convert query into context for prediction.
+        // If start_memory_ids is provided, use those as the recent sequence.
+        // Otherwise, fall back to the analyzer's actual access window.
+        let analyzer = self.analyzer.lock().await;
+
+        let recent_sequence = if !query.start_memory_ids.is_empty() {
             Some(query.start_memory_ids.clone())
+        } else {
+            let ids = analyzer.recent_memory_ids();
+            if ids.is_empty() { None } else { Some(ids) }
         };
 
         let context = PredictionContext {
@@ -626,7 +660,6 @@ impl MfnLayer for ContextPredictionLayer {
             connection_id: None,
         };
 
-        let analyzer = self.analyzer.lock().await;
         let predictions = analyzer.predict_next(&context);
         drop(analyzer);
 

@@ -42,7 +42,11 @@ pub struct PersistenceConfig {
 impl Default for PersistenceConfig {
     fn default() -> Self {
         Self {
-            data_dir: PathBuf::from("/usr/lib/neotec/telos/mfn/memory/layer5_psr"),
+            data_dir: PathBuf::from(
+                std::env::var("MFN_DATA_DIR")
+                    .map(|d| format!("{}/layer5_psr", d))
+                    .unwrap_or_else(|_| "./data/mfn/memory/layer5_psr".to_string()),
+            ),
             pool_id: "default".to_string(),
             fsync_interval_ms: 1000,
             snapshot_interval_secs: 300,

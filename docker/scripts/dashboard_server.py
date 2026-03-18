@@ -514,12 +514,12 @@ async def gather_system_stats() -> Dict[str, Any]:
                 "cpu": round(cpu_percent, 1),
                 "memory": round(memory.percent, 1),
                 "disk": round(disk.percent, 1),
-                "response_time": 50,  # Mock value
-                "total_requests": 1000  # Mock value
+                "response_time": None,  # Requires real metrics collection
+                "total_requests": None  # Requires real metrics collection
             },
             "memory_stats": {
-                "total": 100,  # Mock value
-                "associations": 50,  # Mock value
+                "total": None,  # Requires real metrics collection
+                "associations": None  # Requires real metrics collection
                 "db_size": round(disk.used / (1024 * 1024), 1),
                 "last_backup": datetime.now().isoformat()
             },

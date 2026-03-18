@@ -90,7 +90,7 @@
     },
     "cors": {
       "enabled": true,
-      "allowed_origins": ["*"],
+      "allowed_origins": ["http://localhost:3000"],
       "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       "allowed_headers": ["*"]
     },
@@ -141,7 +141,7 @@
       "key_path": "/app/config/certs/server.key"
     },
     "authentication": {
-      "enabled": false,
+      "enabled": true,
       "type": "bearer",
       "token_expiry": 3600
     },

@@ -5,8 +5,11 @@
 
 use std::collections::HashMap;
 use serde_json::{Value, Map};
-use crate::{Result, MfnProtocolError, MfnBinarySerializer, MfnBinaryDeserializer};
-use crate::types::*;
+use crate::{
+    Result, MfnProtocolError, MfnBinarySerializer, MfnBinaryDeserializer,
+    MessageType, Operation, LayerId,
+    UniversalMemory, UniversalAssociation, AssociationType, UniversalSearchQuery,
+};
 
 /// Compatibility bridge that handles both JSON and binary formats
 pub struct CompatibilityBridge {
@@ -21,6 +24,20 @@ pub struct VersionSupport {
     pub supports_json: bool,
     pub binary_version: u16,
     pub negotiated_features: Vec<String>,
+}
+
+impl Default for VersionSupport {
+    fn default() -> Self {
+        Self {
+            supports_binary: true,
+            supports_json: true,
+            binary_version: 1,
+            negotiated_features: vec![
+                "compression".to_string(),
+                "batch_operations".to_string(),
+            ],
+        }
+    }
 }
 
 impl Default for CompatibilityBridge {
@@ -112,7 +129,7 @@ impl CompatibilityBridge {
         }
 
         let json_str = std::str::from_utf8(data)
-            .map_err(MfnProtocolError::InvalidUtf8)?;
+            .map_err(|e| MfnProtocolError::InvalidUtf8String(e.to_string()))?;
         
         let json_value: Value = serde_json::from_str(json_str)
             .map_err(|e| MfnProtocolError::DeserializationError(e.to_string()))?;
@@ -369,6 +386,11 @@ impl CompatibilityBridge {
             })
             .unwrap_or_default();
 
+        let layer_params = obj.get("layer_params")
+            .and_then(|v| v.as_object())
+            .map(|lp| lp.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+
         Ok(UniversalSearchQuery {
             start_memory_ids,
             content,
@@ -379,6 +401,7 @@ impl CompatibilityBridge {
             max_results,
             min_weight,
             timeout_us,
+            layer_params,
         })
     }
 
@@ -405,7 +428,13 @@ impl CompatibilityBridge {
 
         let created_at = current_timestamp_us();
 
+        let id = obj.get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("assoc_{}_{}", from_memory_id, to_memory_id));
+
         Ok(UniversalAssociation {
+            id,
             from_memory_id,
             to_memory_id,
             association_type,
@@ -556,58 +585,6 @@ fn current_timestamp_us() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros() as u64
-}
-
-// Mock types for compilation
-#[derive(Clone, Debug)]
-pub struct UniversalMemory {
-    pub id: u64,
-    pub content: String,
-    pub embedding: Option<Vec<f32>>,
-    pub tags: Vec<String>,
-    pub metadata: HashMap<String, String>,
-    pub created_at: u64,
-    pub last_accessed: u64,
-    pub access_count: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct UniversalAssociation {
-    pub from_memory_id: u64,
-    pub to_memory_id: u64,
-    pub association_type: AssociationType,
-    pub weight: f64,
-    pub reason: String,
-    pub created_at: u64,
-    pub last_used: u64,
-    pub usage_count: u64,
-}
-
-#[derive(Clone, Debug)]
-pub enum AssociationType {
-    Semantic,
-    Temporal,
-    Causal,
-    Spatial,
-    Conceptual,
-    Hierarchical,
-    Functional,
-    Domain,
-    Cognitive,
-    Custom(String),
-}
-
-#[derive(Clone, Debug)]
-pub struct UniversalSearchQuery {
-    pub start_memory_ids: Vec<u64>,
-    pub content: Option<String>,
-    pub embedding: Option<Vec<f32>>,
-    pub tags: Vec<String>,
-    pub association_types: Vec<AssociationType>,
-    pub max_depth: usize,
-    pub max_results: usize,
-    pub min_weight: f64,
-    pub timeout_us: u64,
 }
 
 #[cfg(test)]

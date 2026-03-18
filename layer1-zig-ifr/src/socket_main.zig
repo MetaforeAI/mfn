@@ -139,7 +139,7 @@ fn printBanner() void {
     print("║                         Ultra-Fast Unix Socket Server                       ║\n", .{});
     print("╠══════════════════════════════════════════════════════════════════════════════╣\n", .{});
     print("║  🏃 Performance Target: <0.1ms query latency (achieved: 0.013ms)          ║\n", .{});
-    print("║  🔗 Socket Path: /tmp/mfn_discord_layer1.sock                                      ║\n", .{});
+    print("║  🔗 Socket Path: /tmp/mfn_test_layer1.sock                                      ║\n", .{});
     print("║  📡 Protocols: JSON (compatibility) + Binary (performance)                ║\n", .{});
     print("║  🎯 Features: Bloom filters, Perfect hashing, Exact matching              ║\n", .{});
     print("║  🦀 Language: Zig (compile-time optimization, zero-GC overhead)           ║\n", .{});
@@ -154,7 +154,7 @@ fn printUsage() void {
     print("USAGE:\n", .{});
     print("    ifr_socket_server [OPTIONS]\n\n", .{});
     print("OPTIONS:\n", .{});
-    print("    --socket-path=PATH        Unix socket path [default: /tmp/mfn_discord_layer1.sock]\n", .{});
+    print("    --socket-path=PATH        Unix socket path [default: /tmp/mfn_test_layer1.sock]\n", .{});
     print("    --max-connections=NUM     Maximum concurrent connections [default: 100]\n", .{});
     print("    --bloom-capacity=NUM      Bloom filter capacity [default: 100000]\n", .{});
     print("    -h, --help                Show this help message\n", .{});

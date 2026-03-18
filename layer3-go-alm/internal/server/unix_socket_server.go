@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	DefaultSocketPath = "/tmp/mfn_discord_layer3.sock"
+	DefaultSocketPath = "/tmp/mfn_test_layer3.sock"
 	MaxConnections    = 200 // Increased for high-concurrency stress tests
 	BufferSize        = 8192
 	RequestTimeout    = 30 * time.Second
@@ -125,7 +125,7 @@ func (s *UnixSocketServer) Start() error {
 	}
 
 	// Set socket permissions for access
-	if err := os.Chmod(s.socketPath, 0666); err != nil {
+	if err := os.Chmod(s.socketPath, 0660); err != nil {
 		listener.Close()
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
@@ -345,18 +345,23 @@ func (s *UnixSocketServer) handleSearch(writer *bufio.Writer, req *SocketRequest
 		limit = 10
 	}
 
-	// Create SearchQuery struct
 	ctx := context.Background()
-	searchQuery := &alm.SearchQuery{
-		StartMemoryIDs: []uint64{}, // Empty for general search
-		MaxResults:     limit,
-		MaxDepth:       3,
-		MinWeight:      0.1,
-		Timeout:        30 * time.Second,
+
+	// When query text is provided and no start memory IDs, use text search
+	var results *alm.SearchResults
+	if req.Query != "" {
+		results, err = pool.SearchByText(ctx, req.Query, limit)
+	} else {
+		searchQuery := &alm.SearchQuery{
+			StartMemoryIDs: []uint64{},
+			MaxResults:     limit,
+			MaxDepth:       3,
+			MinWeight:      0.1,
+			Timeout:        30 * time.Second,
+		}
+		results, err = pool.SearchAssociative(ctx, searchQuery)
 	}
 
-	// Perform associative search with new API
-	results, err := pool.SearchAssociative(ctx, searchQuery)
 	if err != nil {
 		s.sendError(writer, req.RequestID, fmt.Sprintf("Search failed: %v", err))
 		return
@@ -672,18 +677,23 @@ func (s *UnixSocketServer) handleSearchBinary(conn net.Conn, req *SocketRequest,
 		limit = 10
 	}
 
-	// Create SearchQuery struct
 	ctx := context.Background()
-	searchQuery := &alm.SearchQuery{
-		StartMemoryIDs: []uint64{},
-		MaxResults:     limit,
-		MaxDepth:       3,
-		MinWeight:      0.1,
-		Timeout:        30 * time.Second,
+
+	// When query text is provided and no start memory IDs, use text search
+	var results *alm.SearchResults
+	if req.Query != "" {
+		results, err = pool.SearchByText(ctx, req.Query, limit)
+	} else {
+		searchQuery := &alm.SearchQuery{
+			StartMemoryIDs: []uint64{},
+			MaxResults:     limit,
+			MaxDepth:       3,
+			MinWeight:      0.1,
+			Timeout:        30 * time.Second,
+		}
+		results, err = pool.SearchAssociative(ctx, searchQuery)
 	}
 
-	// Perform associative search
-	results, err := pool.SearchAssociative(ctx, searchQuery)
 	if err != nil {
 		s.sendErrorBinary(conn, req.RequestID, fmt.Sprintf("Search failed: %v", err))
 		return
@@ -896,7 +906,7 @@ func (s *UnixSocketServer) handleHealthCheckBinary(conn net.Conn, req *SocketReq
 			"total_associations": stats.TotalAssociations,
 			"total_queries":      atomic.LoadUint64(&s.totalRequests),
 			"success_rate":       1.0, // Could track actual success rate
-			"avg_latency_us":     500,  // Average query latency (placeholder)
+			"avg_latency_us":     0, // Calculated from real request metrics when available
 			"graph_density":      stats.GraphDensity,
 			"active_connections": atomic.LoadInt32(&s.connCount),
 		},

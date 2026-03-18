@@ -62,7 +62,7 @@ func main() {
 	defer ffiServer.Stop()
 
 	// Initialize Unix socket server for inter-layer communication
-	unixServer := server.NewUnixSocketServer(poolManager, "/tmp/mfn_layer3.sock")
+	unixServer := server.NewUnixSocketServer(poolManager, "/tmp/mfn_test_layer3.sock")
 	if err := unixServer.Start(); err != nil {
 		log.Fatalf("Failed to start Unix socket server: %v", err)
 	}

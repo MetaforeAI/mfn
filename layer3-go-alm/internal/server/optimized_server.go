@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -184,7 +185,11 @@ func (s *OptimizedServer) withMiddleware(handler http.Handler) http.Handler {
 		}
 		
 		// CORS headers for API access
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		corsOrigin := os.Getenv("MFN_CORS_ORIGIN")
+		if corsOrigin == "" {
+			corsOrigin = "http://localhost:3000"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		

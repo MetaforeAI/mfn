@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -320,6 +322,112 @@ func (alm *ALM) SearchAssociative(ctx context.Context, query *SearchQuery) (*Sea
 	alm.updateSearchMetrics(searchTime)
 	
 	return results, nil
+}
+
+// SearchByText performs text-based search across all memories, scoring by relevance.
+// It tokenizes the query into lowercase words and scores each memory by how many
+// query tokens appear in its content (case-insensitive substring match).
+// Memories that match are returned directly as results, and optionally their
+// graph neighbors are also included for associative context.
+func (alm *ALM) SearchByText(ctx context.Context, queryText string, maxResults int) (*SearchResults, error) {
+	startTime := time.Now()
+
+	if queryText == "" {
+		return &SearchResults{
+			Results:    []*SearchResult{},
+			TotalFound: 0,
+			SearchTime: time.Since(startTime),
+		}, nil
+	}
+
+	allMemories := alm.graph.GetAllMemories()
+
+	if len(allMemories) == 0 {
+		return &SearchResults{
+			Results:    []*SearchResult{},
+			TotalFound: 0,
+			SearchTime: time.Since(startTime),
+		}, nil
+	}
+
+	// Tokenize query into lowercase words for matching
+	queryLower := strings.ToLower(queryText)
+	queryTokens := strings.Fields(queryLower)
+
+	if len(queryTokens) == 0 {
+		return &SearchResults{
+			Results:    []*SearchResult{},
+			TotalFound: 0,
+			SearchTime: time.Since(startTime),
+		}, nil
+	}
+
+	type scoredMemory struct {
+		memory *Memory
+		score  float64
+	}
+
+	scored := make([]scoredMemory, 0, len(allMemories))
+
+	for _, mem := range allMemories {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		contentLower := strings.ToLower(mem.Content)
+
+		// Score: fraction of query tokens found in content
+		matchCount := 0
+		for _, token := range queryTokens {
+			if strings.Contains(contentLower, token) {
+				matchCount++
+			}
+		}
+
+		if matchCount == 0 {
+			// Also check if the full query appears as a substring
+			if !strings.Contains(contentLower, queryLower) {
+				continue
+			}
+			matchCount = len(queryTokens) // Full match gets max token score
+		}
+
+		score := float64(matchCount) / float64(len(queryTokens))
+		scored = append(scored, scoredMemory{memory: mem, score: score})
+	}
+
+	// Sort by score descending
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	if len(scored) > maxResults {
+		scored = scored[:maxResults]
+	}
+
+	results := make([]*SearchResult, 0, len(scored))
+	for _, sm := range scored {
+		results = append(results, &SearchResult{
+			Memory:      sm.memory,
+			Path:        []*PathStep{},
+			TotalWeight: sm.score,
+			Depth:       0,
+			SearchTime:  time.Since(startTime),
+		})
+	}
+
+	searchTime := time.Since(startTime)
+	alm.updateSearchMetrics(searchTime)
+
+	return &SearchResults{
+		Results:       results,
+		TotalFound:    len(results),
+		SearchTime:    searchTime,
+		NodesExplored: len(allMemories),
+		PathsFound:    len(results),
+	}, nil
 }
 
 // GetGraphStats returns statistics about the memory graph

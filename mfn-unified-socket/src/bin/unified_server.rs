@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config_path = std::env::var("MFN_CONFIG")
-        .unwrap_or_else(|_| "/home/persist/neotec/telos/MFN/mfn-config.yaml".to_string());
+        .unwrap_or_else(|_| "./mfn-config.yaml".to_string());
 
     println!("📋 Loading config from: {}", config_path);
     let config = Arc::new(MFNConfig::from_file(&config_path)?);

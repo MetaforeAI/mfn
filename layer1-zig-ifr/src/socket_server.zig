@@ -2,7 +2,7 @@
 // Ultra-fast exact matching with Unix socket interface
 // Target: Maintain 0.013ms performance with socket access
 //
-// Socket path: /tmp/mfn_discord_layer1.sock
+// Socket path: /tmp/mfn_test_layer1.sock
 // Protocols: JSON (compatibility) and binary (performance)
 // Zig Features: Async I/O, C-compatible interface, zero-GC overhead
 
@@ -23,7 +23,7 @@ const MemoryID = ifr.MemoryID;
 // Configuration and Constants
 // ============================================================================
 
-pub const DEFAULT_SOCKET_PATH = "/tmp/mfn_discord_layer1.sock";
+pub const DEFAULT_SOCKET_PATH = "/tmp/mfn_test_layer1.sock";
 pub const MAX_CONNECTIONS: u32 = 50; // Reduced to limit thread count
 pub const CONNECTION_TIMEOUT_MS: u64 = 30000;
 pub const BUFFER_SIZE: usize = 8192; // 8KB buffer (IFR designed for small exact-match data)

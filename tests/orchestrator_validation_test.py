@@ -43,8 +43,8 @@ def start_orchestrator():
     env["RUST_LOG"] = "info"
 
     proc = subprocess.Popen(
-        ["/home/persist/repos/telepathy/target/release/mfn-gateway"],
-        cwd="/home/persist/repos/telepathy",
+        ["./target/release/mfn-gateway"],
+        cwd=".",
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE

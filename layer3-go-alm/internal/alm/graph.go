@@ -480,10 +480,8 @@ func (g *MemoryGraph) updateStats() {
 		g.stats.GraphDensity = float64(g.stats.TotalAssociations) / float64(maxPossibleEdges)
 	}
 	
-	// TODO: Calculate strongly connected components and largest component
-	// This would require more complex graph algorithms
-	g.stats.StronglyConnected = 1 // Placeholder
-	g.stats.LargestComponent = g.stats.TotalMemories // Placeholder
+	g.stats.StronglyConnected = 0 // Not yet calculated
+	g.stats.LargestComponent = 0  // Not yet calculated
 }
 
 // EvictExpiredEdges removes edges that have exceeded their TTL

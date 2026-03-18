@@ -5,11 +5,14 @@ Tests compression performance on real memory content
 """
 
 import json
+import os
 import time
 import gzip
 import lz4.frame
 import zlib
 from pathlib import Path
+
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 
 def load_real_mfn_data():
     """Load actual memory data from MFN system"""
@@ -17,9 +20,9 @@ def load_real_mfn_data():
     
     # Try to find actual memory files
     memory_files = [
-        "/home/persist/repos/mfn-system/test_memories.json",
-        "/home/persist/repos/mfn-system/layer3_alm/memories.json",
-        "/home/persist/repos/mfn-system/memories/*.json"
+        os.path.join(_project_root, "test_memories.json"),
+        os.path.join(_project_root, "layer3_alm/memories.json"),
+        os.path.join(_project_root, "memories/*.json")
     ]
     
     # Create test memories if no real data found

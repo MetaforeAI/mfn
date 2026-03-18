@@ -16,7 +16,8 @@ class MFNDashboard {
             layer1: { name: 'IFR', status: 'healthy', latency: 0.5, memory: 12, entries: 10000, hitRate: 95 },
             layer2: { name: 'DSR', status: 'healthy', latency: 30, memory: 48, neurons: 100000, accuracy: 92 },
             layer3: { name: 'ALM', status: 'healthy', latency: 160, memory: 128, graphSize: 50000, edges: 500000 },
-            layer4: { name: 'CPE', status: 'degraded', latency: null, memory: null, patterns: null, accuracy: null }
+            layer4: { name: 'CPE', status: 'degraded', latency: null, memory: null, patterns: null, accuracy: null },
+            layer5: { name: 'PSR', status: 'healthy', latency: 1, memory: 16, patterns: 0, searches: 0 }
         };
 
         this.charts = {};
@@ -734,26 +735,32 @@ function showConfigDetail() {
     "layer1": {
       "type": "IFR",
       "implementation": "Zig",
-      "socket": "/tmp/mfn_layer1.sock",
+      "socket": "/tmp/mfn_test_layer1.sock",
       "targetLatency": "1μs"
     },
     "layer2": {
       "type": "DSR",
       "implementation": "Rust",
-      "socket": "/tmp/mfn_layer2.sock",
+      "socket": "/tmp/mfn_test_layer2.sock",
       "targetLatency": "50μs"
     },
     "layer3": {
       "type": "ALM",
       "implementation": "Go",
-      "socket": "/tmp/mfn_layer3.sock",
+      "socket": "/tmp/mfn_test_layer3.sock",
       "targetLatency": "10μs"
     },
     "layer4": {
       "type": "CPE",
       "implementation": "Rust",
-      "socket": "/tmp/mfn_layer4.sock",
+      "socket": "/tmp/mfn_test_layer4.sock",
       "targetLatency": "100μs"
+    },
+    "layer5": {
+      "type": "PSR",
+      "implementation": "Rust",
+      "socket": "/tmp/mfn_test_layer5.sock",
+      "targetLatency": "1ms"
     }
   },
   "monitoring": {

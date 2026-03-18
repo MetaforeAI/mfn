@@ -19,10 +19,11 @@ use std::num::NonZeroUsize;
 use crate::embeddings::EmbeddingService;
 
 // Socket paths for all layers
-pub const LAYER1_SOCKET_PATH: &str = "/tmp/mfn_layer1.sock";
-pub const LAYER2_SOCKET_PATH: &str = "/tmp/mfn_layer2.sock";
-pub const LAYER3_SOCKET_PATH: &str = "/tmp/mfn_layer3.sock";
-pub const LAYER4_SOCKET_PATH: &str = "/tmp/mfn_layer4.sock";
+pub const LAYER1_SOCKET_PATH: &str = "/tmp/mfn_test_layer1.sock";
+pub const LAYER2_SOCKET_PATH: &str = "/tmp/mfn_test_layer2.sock";
+pub const LAYER3_SOCKET_PATH: &str = "/tmp/mfn_test_layer3.sock";
+pub const LAYER4_SOCKET_PATH: &str = "/tmp/mfn_test_layer4.sock";
+pub const LAYER5_SOCKET_PATH: &str = "/tmp/mfn_test_layer5.sock";
 
 // Binary protocol constants
 pub const PROTOCOL_BINARY: u8 = 0x02;

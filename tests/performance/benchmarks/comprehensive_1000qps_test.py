@@ -29,8 +29,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Add the MFN system path
-sys.path.append('/home/persist/repos/mfn-system')
-sys.path.append('/home/persist/repos/mfn-system/horizontal_scaling')
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+sys.path.append(_project_root)
+sys.path.append(os.path.join(_project_root, 'horizontal_scaling'))
 
 from optimized_mfn_client import OptimizedMFNClient, HighThroughputLoadTester
 from load_balancer import MFNLoadBalancer, LoadBalancingStrategy, LoadBalancerConfig
@@ -469,7 +470,7 @@ class ComprehensiveQPSValidator:
     def save_results(self, results: List[TestResult], filename: str = None):
         """Save results to JSON file"""
         if not filename:
-            filename = f"/home/persist/repos/mfn-system/qps_validation_results_{int(time.time())}.json"
+            filename = os.path.join(_project_root, f"qps_validation_results_{int(time.time())}.json")
         
         # Convert results to serializable format
         serializable_results = [asdict(result) for result in results]
@@ -531,7 +532,7 @@ class ComprehensiveQPSValidator:
         ax2.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        chart_file = f"/home/persist/repos/mfn-system/qps_performance_charts_{int(time.time())}.png"
+        chart_file = os.path.join(_project_root, f"qps_performance_charts_{int(time.time())}.png")
         plt.savefig(chart_file, dpi=300, bbox_inches='tight')
         logger.info(f"📊 Performance charts saved to: {chart_file}")
         plt.close()

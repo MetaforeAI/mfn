@@ -63,6 +63,14 @@ class MetricsCollector:
                     'memory': None,
                     'patterns': None,
                     'accuracy': None
+                },
+                'layer5': {
+                    'name': 'PSR',
+                    'status': 'healthy',
+                    'latency': 1,
+                    'memory': 16,
+                    'patterns': 0,
+                    'searches': 0
                 }
             },
             'history': {
@@ -75,10 +83,11 @@ class MetricsCollector:
         }
 
         self.layer_sockets = {
-            'layer1': '/tmp/mfn_layer1.sock',
-            'layer2': '/tmp/mfn_layer2.sock',
-            'layer3': '/tmp/mfn_layer3.sock',
-            'layer4': '/tmp/mfn_layer4.sock'
+            'layer1': '/tmp/mfn_test_layer1.sock',
+            'layer2': '/tmp/mfn_test_layer2.sock',
+            'layer3': '/tmp/mfn_test_layer3.sock',
+            'layer4': '/tmp/mfn_test_layer4.sock',
+            'layer5': '/tmp/mfn_test_layer5.sock'
         }
 
         self.running = False
@@ -222,7 +231,8 @@ class MetricsHTTPHandler(http.server.SimpleHTTPRequestHandler):
             # Serve metrics JSON
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            cors_origin = os.environ.get('MFN_CORS_ORIGIN', 'http://localhost:3000')
+            self.send_header('Access-Control-Allow-Origin', cors_origin)
             self.end_headers()
 
             metrics = self.collector.get_metrics()
@@ -231,7 +241,8 @@ class MetricsHTTPHandler(http.server.SimpleHTTPRequestHandler):
             # Serve logs
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            cors_origin = os.environ.get('MFN_CORS_ORIGIN', 'http://localhost:3000')
+            self.send_header('Access-Control-Allow-Origin', cors_origin)
             self.end_headers()
 
             logs = list(self.collector.metrics['logs'])
@@ -299,10 +310,11 @@ def check_layer_status():
     print("\nChecking MFN layer status...")
 
     layers = {
-        'Layer 1 (IFR)': '/tmp/mfn_layer1.sock',
-        'Layer 2 (DSR)': '/tmp/mfn_layer2.sock',
-        'Layer 3 (ALM)': '/tmp/mfn_layer3.sock',
-        'Layer 4 (CPE)': '/tmp/mfn_layer4.sock'
+        'Layer 1 (IFR)': '/tmp/mfn_test_layer1.sock',
+        'Layer 2 (DSR)': '/tmp/mfn_test_layer2.sock',
+        'Layer 3 (ALM)': '/tmp/mfn_test_layer3.sock',
+        'Layer 4 (CPE)': '/tmp/mfn_test_layer4.sock',
+        'Layer 5 (PSR)': '/tmp/mfn_test_layer5.sock'
     }
 
     for name, socket_path in layers.items():

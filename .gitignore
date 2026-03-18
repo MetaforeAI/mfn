@@ -142,3 +142,23 @@ scanner_cache/
 
 # Backup directories
 backups/
+
+# Compiled layer binaries (build from source)
+layer3-go-alm/layer3_test
+layer3-go-alm/layer3_alm_fixed
+layer3-go-alm/mfn-layer3
+layer1-zig-ifr/socket_main
+
+# Database/persistence artifacts
+*.mdb
+*.aof
+*.db-shm
+*.db-wal
+${base_dir}/
+
+# Legacy code and reports
+legacy/
+*_report.json
+*_benchmark.json
+SECURITY_FINDINGS_SUMMARY.json
+IMPLEMENTATION_INVENTORY.json

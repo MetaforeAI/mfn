@@ -1122,7 +1122,7 @@ class DocumentationValidator:
 
     def __init__(self, test_results: List[TestResult]):
         self.test_results = test_results
-        self.documentation_path = "/home/persist/repos/telepathy/MFN_TECHNICAL_ANALYSIS_REPORT.md"
+        self.documentation_path = "./MFN_TECHNICAL_ANALYSIS_REPORT.md"
 
     def validate_documentation_accuracy(self) -> TestResult:
         """Check if documentation claims match test results"""

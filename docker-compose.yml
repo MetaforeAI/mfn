@@ -107,7 +107,7 @@ services:
     ports:
       - "3001:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
       - GF_INSTALL_PLUGINS=redis-datasource
     volumes:
       - ./docker/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro

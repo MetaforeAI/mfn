@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MFN Orchestrator - Memory Flow Network Coordination Layer
-Coordinates memory operations across all 4 layers for end-to-end memory processing
+Coordinates memory operations across all 5 layers for end-to-end memory processing
 """
 
 import socket
@@ -20,7 +20,7 @@ def send_unified_request(socket_path: str, request_type: str, memory_id: int,
                         metadata: Dict[str, Any] = None,
                         embedding: List[float] = None) -> Dict[str, Any]:
     """Send request using unified binary protocol (4-byte length prefix + JSON)"""
-    # Extract layer number from socket path (e.g., /tmp/mfn_discord_layer1.sock -> "layer1")
+    # Extract layer number from socket path (e.g., /tmp/mfn_test_layer1.sock -> "layer1")
     layer_name = socket_path.split('_')[-1].replace('.sock', '')
 
     payload = {
@@ -160,12 +160,12 @@ class MFNOrchestrator:
         self.layer_configs = {
             'layer1': {
                 'type': 'unix_socket',
-                'socket': '/tmp/mfn_discord_layer1.sock',
+                'socket': '/tmp/mfn_test_layer1.sock',
                 'description': 'Immediate Flow Registry - Exact matching'
             },
             'layer2': {
                 'type': 'unix_socket',
-                'socket': '/tmp/mfn_discord_layer2.sock',
+                'socket': '/tmp/mfn_test_layer2.sock',
                 'description': 'Dynamic Similarity Reservoir - Similarity search'
             },
             'layer3': {
@@ -175,8 +175,13 @@ class MFNOrchestrator:
             },
             'layer4': {
                 'type': 'unix_socket',
-                'socket': '/tmp/mfn_discord_layer4.sock',
+                'socket': '/tmp/mfn_test_layer4.sock',
                 'description': 'Context Prediction Engine - Temporal patterns'
+            },
+            'layer5': {
+                'type': 'unix_socket',
+                'socket': '/tmp/mfn_test_layer5.sock',
+                'description': 'Pattern Structure Registry'
             }
         }
         
@@ -184,9 +189,10 @@ class MFNOrchestrator:
         """
         Complete memory addition flow across all layers
         1. Add to Layer 3 (ALM) for permanent storage
-        2. Add to Layer 1 (IFR) for exact matching 
+        2. Add to Layer 1 (IFR) for exact matching
         3. Add to Layer 2 (DSR) for similarity search
         4. Add to Layer 4 (CPE) for context tracking
+        5. Add to Layer 5 (PSR) for pattern storage
         """
         start_time = time.perf_counter()
         layer_results = {}
@@ -233,7 +239,17 @@ class MFNOrchestrator:
                 print(f"   ✅ Layer 4: Added context tracking")
             else:
                 print(f"   ❌ Layer 4: {l4_result.get('error', 'Failed')}")
-                
+
+            # Step 5: Add to Layer 5 (PSR) for pattern storage
+            print(f"🔄 Step 5: Adding to Layer 5 (PSR)...")
+            l5_result = self._add_to_layer5(memory_id, content, tags)
+            layer_results['layer5'] = l5_result
+
+            if l5_result.get('success'):
+                print(f"   ✅ Layer 5: Added pattern (ID: {l5_result.get('pattern_id', 'unknown')})")
+            else:
+                print(f"   ⚠️  Layer 5: {l5_result.get('error', 'Failed')} (may not be running)")
+
         except Exception as e:
             print(f"❌ Orchestrator error: {e}")
             layer_results['orchestrator_error'] = str(e)
@@ -261,6 +277,7 @@ class MFNOrchestrator:
         2. If no exact match, try Layer 2 (DSR) for similar memories
         3. Use Layer 3 (ALM) for associative search
         4. Get Layer 4 (CPE) context predictions
+        5. Get Layer 5 (PSR) similar patterns
         """
         start_time = time.perf_counter()
         layer_results = {}
@@ -301,7 +318,17 @@ class MFNOrchestrator:
             print(f"🔍 Step 4: Getting Layer 4 (CPE) context predictions...")
             l4_result = self._predict_layer4(query.split(), 3)
             layer_results['layer4'] = l4_result
-            
+
+            # Step 5: Get Layer 5 (PSR) similar patterns
+            print(f"🔍 Step 5: Querying Layer 5 (PSR) for similar patterns...")
+            l5_result = self._query_layer5(query, max_results)
+            layer_results['layer5'] = l5_result
+
+            if l5_result.get('success'):
+                print(f"   ✅ Layer 5: Found {l5_result.get('count', 0)} similar patterns")
+            else:
+                print(f"   ⚠️  Layer 5: {l5_result.get('error', 'No results')} (may not be running)")
+
         except Exception as e:
             print(f"❌ Query orchestrator error: {e}")
             layer_results['orchestrator_error'] = str(e)
@@ -457,6 +484,73 @@ class MFNOrchestrator:
             top_k=sequence_length,
             metadata={"current_context": context}
         )
+
+    def _add_to_layer5(self, memory_id: Optional[int], content: str, tags: List[str] = None) -> Dict[str, Any]:
+        """Add pattern to Layer 5 (PSR) via binary protocol"""
+        pattern_id = f"orch_mem_{memory_id or int(time.time() * 1000)}"
+        embedding = self._text_to_embedding_256(content)
+        created_at = int(time.time() * 1000)
+
+        message = {
+            "type": "AddPattern",
+            "request_id": f"orch_{int(time.time() * 1000)}",
+            "pattern": {
+                "id": pattern_id,
+                "name": content[:80],
+                "category": "Transformational",
+                "embedding": embedding,
+                "source_patterns": [],
+                "composable_with": [],
+                "slots": {},
+                "constraints": [],
+                "domain": "Any",
+                "codomain": "Any",
+                "text_example": content,
+                "image_example": "",
+                "audio_example": "",
+                "code_example": "",
+                "activation_count": 0,
+                "confidence": 0.95,
+                "first_seen_step": 0,
+                "last_used_step": 0,
+                "created_at": created_at,
+            },
+        }
+
+        result = self._send_binary_socket_message('layer5', message)
+        if result.get('success'):
+            response = result.get('response', {})
+            if response.get('type') == 'AddPattern_Response' and response.get('success'):
+                return {"success": True, "pattern_id": response.get('pattern_id', pattern_id)}
+            return {"success": False, "error": f"Unexpected response: {response.get('type', 'unknown')}"}
+        return result
+
+    def _query_layer5(self, query: str, top_k: int = 5, min_confidence: float = 0.3) -> Dict[str, Any]:
+        """Query Layer 5 (PSR) for similar patterns via binary protocol"""
+        query_embedding = self._text_to_embedding_256(query)
+
+        message = {
+            "type": "SimilaritySearch",
+            "request_id": f"orch_{int(time.time() * 1000)}",
+            "embedding": query_embedding,
+            "top_k": top_k,
+            "min_confidence": min_confidence,
+        }
+
+        result = self._send_binary_socket_message('layer5', message)
+        if result.get('success'):
+            response = result.get('response', {})
+            if response.get('type') == 'SimilaritySearch_Response' and response.get('success'):
+                return {"success": True, "results": response.get('results', []), "count": response.get('count', 0)}
+            return {"success": False, "error": f"Unexpected response: {response.get('type', 'unknown')}"}
+        return result
+
+    def _text_to_embedding_256(self, text: str) -> List[float]:
+        """Convert text to 256-dimensional embedding vector for Layer 5 PSR."""
+        np.random.seed(hash(text) % (2**32))
+        embedding = np.random.randn(256).astype(np.float32)
+        embedding = embedding / np.linalg.norm(embedding)
+        return embedding.tolist()
     
     def _send_unix_socket_message(self, layer: str, message: Dict[str, Any]) -> Dict[str, Any]:
         """Send message to Unix socket and return response (text protocol)"""
@@ -571,7 +665,7 @@ def main():
     print(f"\n🎯 MFN Orchestrator Test Complete")
     print("=" * 60)
     print("✅ Demonstrates end-to-end memory flow coordination")
-    print("🚀 All 4 layers working together for memory processing")
+    print("🚀 All 5 layers working together for memory processing")
 
 if __name__ == "__main__":
     main()

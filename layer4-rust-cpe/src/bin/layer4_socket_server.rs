@@ -14,10 +14,9 @@ serde = { version = "1.0", features = ["derive"] }
 use std::sync::Arc;
 use std::path::PathBuf;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig, ConnectionId, PersistenceConfig, PoolManager};
-use mfn_core::{UniversalSearchQuery, MemoryId, current_timestamp, MfnLayer, RoutingDecision};
-use std::collections::HashMap;
+use tokio::io::AsyncWriteExt;
+use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig, PoolManager};
+use mfn_core::current_timestamp;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
@@ -221,7 +220,7 @@ async fn handle_add_memory_context(
 async fn handle_predict_context(
     layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
-    conn_id: &str
+    _conn_id: &str
 ) -> ContextResponse {
     let current_context = request.payload.get("current_context")
         .and_then(|v| v.as_array())
@@ -230,60 +229,44 @@ async fn handle_predict_context(
             .map(|s| s.to_string())
             .collect::<Vec<String>>())
         .unwrap_or_default();
-    
+
     let sequence_length = request.payload.get("sequence_length")
         .and_then(|v| v.as_u64())
         .unwrap_or(5) as usize;
-    
-    // Create a search query for context prediction
-    let query = UniversalSearchQuery {
-        start_memory_ids: vec![],
-        content: Some(current_context.join(" ")),
-        embedding: None,
-        tags: vec![],
-        association_types: vec![],
-        max_depth: 3,
-        max_results: sequence_length,
-        min_weight: 0.5,
-        timeout_us: 10_000_000,
-        layer_params: HashMap::new(),
-    };
-    
-    match layer.search(&query).await {
-        Ok(decision) => {
-            let results = match decision {
-                mfn_core::RoutingDecision::FoundExact { results } => results,
-                mfn_core::RoutingDecision::FoundPartial { results, .. } => results,
-                mfn_core::RoutingDecision::SearchComplete { results } => results,
-                mfn_core::RoutingDecision::RouteToLayers { .. } => vec![],
-            };
 
-            ContextResponse {
-                response_type: "PredictContext_Response".to_string(),
-                request_id: request.request_id.clone(),
-                success: true,
-                data: serde_json::json!({
-                    "predictions": results,
-                    "context": current_context,
-                    "predicted_sequence_length": sequence_length
-                })
-            }
-        },
-        Err(e) => ContextResponse {
-            response_type: "error".to_string(),
-            request_id: request.request_id.clone(),
-            success: false,
-            data: serde_json::json!({
-                "error": format!("Prediction failed: {}", e)
-            })
-        }
+    // Use the direct prediction path that reads from the temporal analyzer's
+    // actual access window, rather than going through MfnLayer::search() which
+    // requires start_memory_ids (the client sends string contexts, not memory IDs).
+    let predictions = layer.predict_from_recent(sequence_length).await;
+
+    let prediction_json: Vec<serde_json::Value> = predictions
+        .iter()
+        .map(|pred| serde_json::json!({
+            "memory_id": pred.memory_id,
+            "confidence": pred.confidence,
+            "prediction_type": format!("{:?}", pred.prediction_type),
+            "estimated_time_us": pred.estimated_time_us,
+            "contributing_evidence": pred.contributing_evidence,
+        }))
+        .collect();
+
+    ContextResponse {
+        response_type: "PredictContext_Response".to_string(),
+        request_id: request.request_id.clone(),
+        success: true,
+        data: serde_json::json!({
+            "predictions": prediction_json,
+            "context": current_context,
+            "predicted_sequence_length": sequence_length,
+            "total_predictions": prediction_json.len()
+        })
     }
 }
 
 async fn handle_get_context_history(
-    layer: &Arc<ContextPredictionLayer>,
+    _layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
-    conn_id: &str
+    _conn_id: &str
 ) -> ContextResponse {
     let memory_id = request.payload.get("memory_id")
         .and_then(|v| v.as_u64())
@@ -410,10 +393,14 @@ async fn main() -> Result<()> {
 
     println!("🧠 Starting Layer 4 CPE Socket Server (Multi-Pool)");
     println!("🎯 Target: Context prediction and temporal analysis");
-    println!("🔗 Socket: /tmp/mfn_discord_layer4.sock");
+    println!("🔗 Socket: /tmp/mfn_test_layer4.sock");
 
     // Create data directory for all pools
-    let data_dir = PathBuf::from("/usr/lib/neotec/telos/mfn/memory/layer4_cpe");
+    let data_dir = PathBuf::from(
+        std::env::var("MFN_DATA_DIR")
+            .map(|d| format!("{}/layer4_cpe", d))
+            .unwrap_or_else(|_| "./data/mfn/memory/layer4_cpe".to_string()),
+    );
     std::fs::create_dir_all(&data_dir)?;
     println!("💾 Multi-pool persistence enabled: {}", data_dir.display());
     println!("📦 Default pool: crucible_training");
@@ -423,7 +410,7 @@ async fn main() -> Result<()> {
     let pool_manager = Arc::new(PoolManager::new(data_dir, config));
 
     // Remove existing socket file
-    let socket_path = "/tmp/mfn_discord_layer4.sock";
+    let socket_path = "/tmp/mfn_test_layer4.sock";
     if std::path::Path::new(socket_path).exists() {
         std::fs::remove_file(socket_path)?;
     }

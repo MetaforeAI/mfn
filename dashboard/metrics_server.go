@@ -112,6 +112,7 @@ func NewMetricsServer(port int) *MetricsServer {
 				"layer2": {Name: "DSR", Status: "healthy"},
 				"layer3": {Name: "ALM", Status: "healthy"},
 				"layer4": {Name: "CPE", Status: "degraded"},
+				"layer5": {Name: "PSR", Status: "healthy"},
 			},
 			History: &MetricsHistory{
 				MaxPoints: 3600, // Store 1 hour at 1s resolution
@@ -138,6 +139,10 @@ func NewMetricsServer(port int) *MetricsServer {
 	ms.metrics.Layers["layer4"].Custom = map[string]interface{}{
 		"patterns": 0,
 		"accuracy": 0,
+	}
+	ms.metrics.Layers["layer5"].Custom = map[string]interface{}{
+		"patterns": 0,
+		"searches": 0,
 	}
 
 	return ms
@@ -496,26 +501,32 @@ func (ms *MetricsServer) getSystemConfig() map[string]interface{} {
 			"layer1": map[string]interface{}{
 				"type":          "IFR",
 				"implementation": "Zig",
-				"socket":        "/tmp/mfn_layer1.sock",
+				"socket":        "/tmp/mfn_test_layer1.sock",
 				"targetLatency": "1μs",
 			},
 			"layer2": map[string]interface{}{
 				"type":          "DSR",
 				"implementation": "Rust",
-				"socket":        "/tmp/mfn_layer2.sock",
+				"socket":        "/tmp/mfn_test_layer2.sock",
 				"targetLatency": "50μs",
 			},
 			"layer3": map[string]interface{}{
 				"type":          "ALM",
 				"implementation": "Go",
-				"socket":        "/tmp/mfn_layer3.sock",
+				"socket":        "/tmp/mfn_test_layer3.sock",
 				"targetLatency": "10μs",
 			},
 			"layer4": map[string]interface{}{
 				"type":          "CPE",
 				"implementation": "Rust",
-				"socket":        "/tmp/mfn_layer4.sock",
+				"socket":        "/tmp/mfn_test_layer4.sock",
 				"targetLatency": "100μs",
+			},
+			"layer5": map[string]interface{}{
+				"type":          "PSR",
+				"implementation": "Rust",
+				"socket":        "/tmp/mfn_test_layer5.sock",
+				"targetLatency": "1ms",
 			},
 		},
 		"monitoring": map[string]interface{}{

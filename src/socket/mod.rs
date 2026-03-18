@@ -37,10 +37,11 @@ use std::time::Duration;
 pub struct SocketPaths;
 
 impl SocketPaths {
-    pub const LAYER1_IFR: &'static str = "/tmp/mfn_layer1.sock";
-    pub const LAYER2_DSR: &'static str = "/tmp/mfn_layer2.sock";
-    pub const LAYER3_ALM: &'static str = "/tmp/mfn_layer3.sock";
-    pub const LAYER4_CPE: &'static str = "/tmp/mfn_layer4.sock";
+    pub const LAYER1_IFR: &'static str = "/tmp/mfn_test_layer1.sock";
+    pub const LAYER2_DSR: &'static str = "/tmp/mfn_test_layer2.sock";
+    pub const LAYER3_ALM: &'static str = "/tmp/mfn_test_layer3.sock";
+    pub const LAYER4_CPE: &'static str = "/tmp/mfn_test_layer4.sock";
+    pub const LAYER5_PSR: &'static str = "/tmp/mfn_test_layer5.sock";
     pub const API_GATEWAY: &'static str = "/tmp/mfn_gateway.sock";
     pub const ORCHESTRATOR: &'static str = "/tmp/mfn_orchestrator.sock";
 
@@ -51,8 +52,9 @@ impl SocketPaths {
             2 => PathBuf::from(Self::LAYER2_DSR),
             3 => PathBuf::from(Self::LAYER3_ALM),
             4 => PathBuf::from(Self::LAYER4_CPE),
+            5 => PathBuf::from(Self::LAYER5_PSR),
             0xFF => PathBuf::from(Self::ORCHESTRATOR),
-            _ => PathBuf::from(format!("/tmp/mfn_layer{}.sock", layer_id)),
+            _ => PathBuf::from(format!("/tmp/mfn_test_layer{}.sock", layer_id)),
         }
     }
 
@@ -63,6 +65,7 @@ impl SocketPaths {
             (2, Path::new(Self::LAYER2_DSR).exists()),
             (3, Path::new(Self::LAYER3_ALM).exists()),
             (4, Path::new(Self::LAYER4_CPE).exists()),
+            (5, Path::new(Self::LAYER5_PSR).exists()),
         ]
     }
 }
@@ -184,11 +187,11 @@ mod tests {
     fn test_socket_paths() {
         assert_eq!(
             SocketPaths::get_layer_socket(1),
-            PathBuf::from("/tmp/mfn_layer1.sock")
+            PathBuf::from("/tmp/mfn_test_layer1.sock")
         );
         assert_eq!(
             SocketPaths::get_layer_socket(2),
-            PathBuf::from("/tmp/mfn_layer2.sock")
+            PathBuf::from("/tmp/mfn_test_layer2.sock")
         );
     }
 

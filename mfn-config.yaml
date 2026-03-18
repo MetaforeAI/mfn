@@ -1,14 +1,14 @@
 # MFN Unified Configuration
 # Single source of truth for all layer socket paths and settings
 
-project: discord
-socket_prefix: mfn_discord
+project: test
+socket_prefix: mfn_test
 
 layers:
   layer1:
     name: "IFR - Immediate Flow Registry"
     language: zig
-    socket_path: /tmp/mfn_discord_layer1.sock
+    socket_path: /tmp/mfn_test_layer1.sock
     port: null
     protocol: binary
     operations:
@@ -21,7 +21,7 @@ layers:
   layer2:
     name: "DSR - Dynamic Similarity Reservoir"
     language: rust
-    socket_path: /tmp/mfn_discord_layer2.sock
+    socket_path: /tmp/mfn_test_layer2.sock
     port: null
     protocol: binary
     operations:
@@ -35,7 +35,7 @@ layers:
   layer3:
     name: "ALM - Associative Link Mesh"
     language: go
-    socket_path: /tmp/mfn_discord_layer3.sock
+    socket_path: /tmp/mfn_test_layer3.sock
     port: 8082
     protocol: binary
     operations:
@@ -49,7 +49,7 @@ layers:
   layer4:
     name: "CPE - Context Prediction Engine"
     language: rust
-    socket_path: /tmp/mfn_discord_layer4.sock
+    socket_path: /tmp/mfn_test_layer4.sock
     port: null
     protocol: binary
     operations:
@@ -63,7 +63,7 @@ layers:
   layer5:
     name: "PSR - Pattern Structure Registry"
     language: rust
-    socket_path: /tmp/mfn_discord_layer5.sock
+    socket_path: /tmp/mfn_test_layer5.sock
     port: null
     protocol: binary
     operations:
@@ -84,12 +84,12 @@ orchestrator:
     - /memory/context
 
 persistence:
-  base_dir: /usr/lib/neotec/telos/mfn/memory
-  layer1_dir: /usr/lib/neotec/telos/mfn/memory/layer1_ifr
-  layer2_dir: /usr/lib/neotec/telos/mfn/memory/layer2_dsr
-  layer3_dir: /usr/lib/neotec/telos/mfn/memory/layer3_alm
-  layer4_dir: /usr/lib/neotec/telos/mfn/memory/layer4_cpe
-  layer5_dir: /usr/lib/neotec/telos/mfn/memory/layer5_psr
+  base_dir: ./data/mfn/memory
+  layer1_dir: ./data/mfn/memory/layer1_ifr
+  layer2_dir: ./data/mfn/memory/layer2_dsr
+  layer3_dir: ./data/mfn/memory/layer3_alm
+  layer4_dir: ./data/mfn/memory/layer4_cpe
+  layer5_dir: ./data/mfn/memory/layer5_psr
 
 common_protocol:
   binary_format: true

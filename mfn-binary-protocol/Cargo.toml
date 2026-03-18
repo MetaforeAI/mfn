@@ -27,8 +27,8 @@ tokio = { version = "1.0", features = ["full"], optional = true }
 criterion = { version = "0.5", optional = true }
 proptest = { version = "1.0", optional = true }
 
-# MFN core types (would be actual dependency)
-# mfn-core = { path = "../mfn-core" }
+# MFN core types
+mfn-core = { path = "../mfn-core" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

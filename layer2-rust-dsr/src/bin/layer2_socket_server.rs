@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let socket_path = env::var("MFN_SOCKET_PATH")
-        .unwrap_or_else(|_| "/tmp/mfn_crucible_layer2.sock".to_string());
+        .unwrap_or_else(|_| "/tmp/mfn_test_layer2.sock".to_string());
     let data_dir_str = env::var("MFN_DATA_DIR")
         .unwrap_or_else(|_| "./data/mfn/memory/layer2_dsr".to_string());
 

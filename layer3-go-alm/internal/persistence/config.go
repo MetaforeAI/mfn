@@ -9,6 +9,7 @@ package persistence
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -32,8 +33,12 @@ type Config struct {
 
 // DefaultConfig returns default persistence configuration for Layer 3
 func DefaultConfig() *Config {
+	dataDir := os.Getenv("MFN_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data/mfn/memory"
+	}
 	return &Config{
-		DataDir:              "/usr/lib/neotec/telos/mfn/memory/layer3_alm",
+		DataDir:              filepath.Join(dataDir, "layer3_alm"),
 		PoolID:               "default",
 		FsyncIntervalMs:      1000,
 		SnapshotIntervalSecs: 300,

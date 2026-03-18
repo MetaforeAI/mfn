@@ -32,7 +32,7 @@ class Layer3OptimizationBenchmark:
             print("🚀 Starting optimized Layer 3 ALM server...")
             self.process = subprocess.Popen(
                 ["./layer3_alm_optimized"],
-                cwd="/home/persist/repos/mfn-system/layer3-go-alm",
+                cwd=os.path.join(os.path.dirname(os.path.abspath(__file__))),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
@@ -444,7 +444,7 @@ def main():
         results = benchmark.run_comprehensive_benchmark()
         
         # Save results
-        output_file = "/home/persist/repos/mfn-system/layer3_optimization_benchmark.json"
+        output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "layer3_optimization_benchmark.json")
         with open(output_file, "w") as f:
             json.dump(results, f, indent=2, default=str)
         

@@ -281,13 +281,13 @@ async fn handle_ping(request: &ContextRequest) -> ContextResponse {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🧠 Starting Layer 4 Simple Context Prediction Server");
     println!("🎯 Target: Basic context prediction and temporal tracking");
-    println!("🔗 Socket: /tmp/mfn_layer4.sock");
-    
+    println!("🔗 Socket: /tmp/mfn_test_layer4.sock");
+
     // Create context store
     let context_store = std::sync::Arc::new(tokio::sync::Mutex::new(SimpleContextStore::new()));
-    
+
     // Remove existing socket file
-    let socket_path = "/tmp/mfn_layer4.sock";
+    let socket_path = "/tmp/mfn_test_layer4.sock";
     if std::path::Path::new(socket_path).exists() {
         std::fs::remove_file(socket_path)?;
     }

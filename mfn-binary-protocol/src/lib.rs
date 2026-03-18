@@ -17,6 +17,13 @@ use std::mem;
 use std::slice;
 use std::time::Duration;
 
+// Import canonical types from mfn-core
+pub use mfn_core::memory_types::{
+    UniversalMemory, UniversalAssociation, AssociationType, UniversalSearchQuery,
+};
+
+pub mod compatibility;
+
 // ============================================================================
 // Core Error Types
 // ============================================================================
@@ -123,6 +130,12 @@ impl MfnBinarySerializer {
     }
 
     #[inline(always)]
+    pub fn write_f64(&mut self, value: f64) -> Result<()> {
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
+    #[inline(always)]
     pub fn write_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.buffer.extend_from_slice(data);
         Ok(())
@@ -191,15 +204,16 @@ impl MfnBinarySerializer {
 
     // Serialize association
     pub fn serialize_association(&mut self, assoc: &UniversalAssociation) -> Result<()> {
+        self.write_string(&assoc.id)?;
         self.write_u64(assoc.from_memory_id)?;
         self.write_u64(assoc.to_memory_id)?;
         self.write_u64(assoc.created_at)?;
         self.write_u64(assoc.last_used)?;
         self.write_u64(assoc.usage_count)?;
 
-        self.write_f32(assoc.weight)?;
+        self.write_f64(assoc.weight)?;
         self.write_u8(association_type_to_u8(&assoc.association_type))?;
-        self.write_bytes(&[0, 0, 0])?; // padding
+        self.write_bytes(&[0, 0, 0, 0, 0, 0, 0])?; // padding to 8-byte alignment
 
         self.write_string(&assoc.reason)?;
 
@@ -215,7 +229,7 @@ impl MfnBinarySerializer {
 
         self.write_u32(query.max_results as u32)?;
         self.write_u32(query.max_depth as u32)?;
-        self.write_f32(query.min_weight)?;
+        self.write_f64(query.min_weight)?;
 
         // Starting memory IDs
         self.write_u16(query.start_memory_ids.len() as u16)?;
@@ -376,6 +390,12 @@ impl<'a> MfnBinaryDeserializer<'a> {
         Ok(f32::from_bits(bits))
     }
 
+    #[inline(always)]
+    pub fn read_f64(&mut self) -> Result<f64> {
+        let bits = self.read_u64()?;
+        Ok(f64::from_bits(bits))
+    }
+
     pub fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         if self.position + len > self.buffer.len() {
             return Err(MfnProtocolError::BufferTooSmall {
@@ -532,12 +552,25 @@ fn association_type_to_u8(assoc_type: &AssociationType) -> u8 {
         AssociationType::Functional => 0x07,
         AssociationType::Domain => 0x08,
         AssociationType::Cognitive => 0x09,
-        AssociationType::Similarity => 0x0A,
-        AssociationType::Reference => 0x0B,
         AssociationType::Custom(name) => {
             // Hash custom name to 0xF0-0xFF range
             0xF0 + (hash_string(name) % 16) as u8
         }
+    }
+}
+
+pub fn u8_to_association_type(value: u8) -> AssociationType {
+    match value {
+        0x01 => AssociationType::Semantic,
+        0x02 => AssociationType::Temporal,
+        0x03 => AssociationType::Causal,
+        0x04 => AssociationType::Spatial,
+        0x05 => AssociationType::Conceptual,
+        0x06 => AssociationType::Hierarchical,
+        0x07 => AssociationType::Functional,
+        0x08 => AssociationType::Domain,
+        0x09 => AssociationType::Cognitive,
+        _ => AssociationType::Custom(format!("unknown_0x{:02x}", value)),
     }
 }
 
@@ -815,73 +848,21 @@ pub struct ParsedMessage {
     pub payload: Vec<u8>,
 }
 
-// Stub types for mfn-core integration (would be imported from mfn-core crate in production)
-#[derive(Debug, Clone)]
-pub struct UniversalMemory {
-    pub id: u64,
-    pub created_at: u64,
-    pub last_accessed: u64,
-    pub access_count: u64,
-    pub content: String,
-    pub tags: Vec<String>,
-    pub metadata: HashMap<String, String>,
-    pub embedding: Option<Vec<f32>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct UniversalAssociation {
-    pub from_memory_id: u64,
-    pub to_memory_id: u64,
-    pub created_at: u64,
-    pub last_used: u64,
-    pub usage_count: u64,
-    pub weight: f32,
-    pub association_type: AssociationType,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum AssociationType {
-    Semantic,
-    Temporal,
-    Causal,
-    Spatial,
-    Conceptual,
-    Hierarchical,
-    Functional,
-    Domain,
-    Cognitive,
-    Custom(String),
-    Similarity,
-    Reference,
-}
-
-#[derive(Debug, Clone)]
-pub struct UniversalSearchQuery {
-    pub timeout_us: u64,
-    pub max_results: usize,
-    pub max_depth: usize,
-    pub min_weight: f32,
-    pub query_text: String,
-    pub query_embedding: Option<Vec<f32>>,
-    pub filters: HashMap<String, String>,
-    pub start_memory_ids: Vec<u64>,
-    pub association_types: Vec<AssociationType>,
-    pub tags: Vec<String>,
-    pub content: Option<String>,
-    pub embedding: Option<Vec<f32>>,
-}
-
 // Placeholder implementations for the missing modules
 pub mod constants {
     pub const MFN_MAGIC: u32 = 0x4D464E01;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum MessageType {
     MemoryAdd = 0x0001,
     MemoryGet = 0x0002,
+    AssocAdd = 0x0011,
     SearchAssoc = 0x0022,
+    HealthCheck = 0x0030,
+    Performance = 0x0031,
+    Batch = 0x0040,
     Response = 0x8000,
     Error = 0x8001,
 }
@@ -891,7 +872,11 @@ impl MessageType {
         match value {
             0x0001 => Ok(MessageType::MemoryAdd),
             0x0002 => Ok(MessageType::MemoryGet),
+            0x0011 => Ok(MessageType::AssocAdd),
             0x0022 => Ok(MessageType::SearchAssoc),
+            0x0030 => Ok(MessageType::HealthCheck),
+            0x0031 => Ok(MessageType::Performance),
+            0x0040 => Ok(MessageType::Batch),
             0x8000 => Ok(MessageType::Response),
             0x8001 => Ok(MessageType::Error),
             _ => Err(MfnProtocolError::InvalidMessageType(value)),
@@ -899,12 +884,15 @@ impl MessageType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Operation {
     Add = 0x01,
     Get = 0x02,
     Search = 0x05,
     Batch = 0x06,
+    Health = 0x07,
+    Metrics = 0x08,
 }
 
 impl Operation {
@@ -914,6 +902,8 @@ impl Operation {
             0x02 => Ok(Operation::Get),
             0x05 => Ok(Operation::Search),
             0x06 => Ok(Operation::Batch),
+            0x07 => Ok(Operation::Health),
+            0x08 => Ok(Operation::Metrics),
             _ => Err(MfnProtocolError::DeserializationError(
                 format!("Invalid operation: {}", value)
             )),
@@ -921,6 +911,7 @@ impl Operation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LayerId {
     Layer1 = 0x01,

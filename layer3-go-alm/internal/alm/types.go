@@ -48,6 +48,7 @@ const (
 // SearchQuery represents a search request for associative memories
 type SearchQuery struct {
 	StartMemoryIDs []uint64          `json:"start_memory_ids"`
+	QueryText      string            `json:"query_text,omitempty"`
 	Tags           []string          `json:"tags,omitempty"`
 	AssocTypes     []AssociationType `json:"association_types,omitempty"`
 	MaxDepth       int               `json:"max_depth"`

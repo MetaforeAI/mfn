@@ -33,11 +33,12 @@ pub struct SystemHealthStatus {
 }
 
 /// Layer socket paths
-const LAYER_SOCKETS: [(&str, u8, &str); 4] = [
-    ("Layer1_IFR", 1, "/tmp/mfn_layer1.sock"),
-    ("Layer2_DSR", 2, "/tmp/mfn_layer2.sock"),
-    ("Layer3_ALM", 3, "/tmp/mfn_layer3.sock"),
-    ("Layer4_CPE", 4, "/tmp/mfn_layer4.sock"),
+const LAYER_SOCKETS: [(&str, u8, &str); 5] = [
+    ("Layer1_IFR", 1, "/tmp/mfn_test_layer1.sock"),
+    ("Layer2_DSR", 2, "/tmp/mfn_test_layer2.sock"),
+    ("Layer3_ALM", 3, "/tmp/mfn_test_layer3.sock"),
+    ("Layer4_CPE", 4, "/tmp/mfn_test_layer4.sock"),
+    ("Layer5_PSR", 5, "/tmp/mfn_test_layer5.sock"),
 ];
 
 /// Check health of a single layer via Unix socket

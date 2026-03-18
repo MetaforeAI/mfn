@@ -27,7 +27,14 @@ pub const Config = struct {
 
     pub fn default(allocator: std.mem.Allocator) !Config {
         return Config{
-            .data_dir = try allocator.dupe(u8, "/usr/lib/neotec/telos/mfn/memory/layer1_ifr"),
+            .data_dir = blk: {
+                const env_val = std.posix.getenv("MFN_DATA_DIR");
+                if (env_val) |base_dir| {
+                    break :blk try std.fmt.allocPrint(allocator, "{s}/layer1_ifr", .{base_dir});
+                } else {
+                    break :blk try allocator.dupe(u8, "./data/mfn/memory/layer1_ifr");
+                }
+            },
             .pool_id = try allocator.dupe(u8, "default"),
             .fsync_interval_ms = 1000,
             .snapshot_interval_secs = 300,
