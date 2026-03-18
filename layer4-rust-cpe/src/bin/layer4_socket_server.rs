@@ -11,14 +11,20 @@ serde = { version = "1.0", features = ["derive"] }
 //! Layer 4 CPE Socket Server
 //! High-performance Unix socket server for Context Prediction Engine
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::path::PathBuf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use layer4_cpe::{ContextPredictionLayer, ContextPredictionConfig, PoolManager};
-use mfn_core::current_timestamp;
+use mfn_core::{MemoryId, current_timestamp};
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
+
+/// Maps content text to its memory_id (populated by AddMemoryContext, queried by PredictContext).
+/// Keyed by pool_id -> content_string -> memory_id.
+type ContentIdMap = Arc<RwLock<HashMap<String, HashMap<String, MemoryId>>>>;
 
 #[derive(Debug, Deserialize)]
 struct ContextRequest {
@@ -49,10 +55,10 @@ async fn handle_connection(
     stream: UnixStream,
     pool_manager: Arc<PoolManager>,
     server_start_time: std::time::Instant,
+    content_id_map: ContentIdMap,
 ) -> Result<()> {
     use tokio::io::AsyncReadExt;
 
-    // Generate unique connection ID
     let conn_id = format!("conn_{}", uuid::Uuid::new_v4());
     eprintln!("New connection: {}", conn_id);
 
@@ -64,7 +70,6 @@ async fn handle_connection(
         match read_half.read_exact(&mut len_buf).await {
             Ok(_) => {},
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                // Connection closed
                 break;
             },
             Err(e) => {
@@ -74,20 +79,17 @@ async fn handle_connection(
 
         let msg_len = u32::from_le_bytes(len_buf) as usize;
 
-        // Sanity check on message length
         if msg_len == 0 || msg_len > 10_000_000 {
             eprintln!("Invalid message length: {}", msg_len);
             break;
         }
 
-        // Read message payload
         let mut msg_buf = vec![0u8; msg_len];
         if let Err(e) = read_half.read_exact(&mut msg_buf).await {
             eprintln!("Failed to read message: {}", e);
             break;
         }
 
-        // Parse as UTF-8 string
         let msg_str = match std::str::from_utf8(&msg_buf) {
             Ok(s) => s,
             Err(e) => {
@@ -96,97 +98,96 @@ async fn handle_connection(
             }
         };
 
-        // Parse JSON request
         let request: ContextRequest = match serde_json::from_str(msg_str) {
             Ok(req) => req,
             Err(e) => {
-                let error_response = ContextResponse {
-                    response_type: "error".to_string(),
-                    request_id: "unknown".to_string(),
-                    success: false,
-                    data: serde_json::json!({
-                        "error": format!("Invalid JSON: {}", e)
-                    })
-                };
-                let response_json = serde_json::to_string(&error_response)?;
-                let response_bytes = response_json.as_bytes();
-                let response_len = response_bytes.len() as u32;
-                write_half.write_all(&response_len.to_le_bytes()).await?;
-                write_half.write_all(response_bytes).await?;
+                let resp = make_error_response("unknown", &format!("Invalid JSON: {}", e));
+                send_response(&mut write_half, &resp).await?;
                 continue;
             }
         };
 
-        // Get or create pool for this request
         let layer = match pool_manager.get_or_create_pool(&request.pool_id).await {
             Ok(pool) => pool,
             Err(e) => {
-                let error_response = ContextResponse {
-                    response_type: "error".to_string(),
-                    request_id: request.request_id.clone(),
-                    success: false,
-                    data: serde_json::json!({
-                        "error": format!("Failed to get pool '{}': {}", request.pool_id, e)
-                    })
-                };
-                let response_json = serde_json::to_string(&error_response)?;
-                let response_bytes = response_json.as_bytes();
-                let response_len = response_bytes.len() as u32;
-                write_half.write_all(&response_len.to_le_bytes()).await?;
-                write_half.write_all(response_bytes).await?;
+                let resp = make_error_response(
+                    &request.request_id,
+                    &format!("Failed to get pool '{}': {}", request.pool_id, e),
+                );
+                send_response(&mut write_half, &resp).await?;
                 continue;
             }
         };
 
-        // Handle different request types
         let response = match request.request_type.as_str() {
-            "AddMemoryContext" => handle_add_memory_context(&layer, &request, &conn_id).await,
-            "PredictContext" => handle_predict_context(&layer, &request, &conn_id).await,
-            "GetContextHistory" => handle_get_context_history(&layer, &request, &conn_id).await,
-            "Ping" => handle_ping(&request).await,
-            "HealthCheck" => handle_health_check(&pool_manager, &layer, &request, server_start_time).await,
-            "ListPools" => handle_list_pools(&pool_manager, &request).await,
-            _ => ContextResponse {
-                response_type: "error".to_string(),
-                request_id: request.request_id,
-                success: false,
-                data: serde_json::json!({
-                    "error": format!("Unknown request type: {}", request.request_type)
-                })
+            "AddMemoryContext" => {
+                handle_add_memory_context(
+                    &layer, &request, &conn_id, &content_id_map, &request.pool_id,
+                ).await
             }
+            "PredictContext" => {
+                handle_predict_context(
+                    &layer, &request, &conn_id, &content_id_map, &request.pool_id,
+                ).await
+            }
+            "GetContextHistory" => {
+                handle_get_context_history(&layer, &request, &conn_id).await
+            }
+            "Ping" => handle_ping(&request).await,
+            "HealthCheck" => {
+                handle_health_check(&pool_manager, &layer, &request, server_start_time).await
+            }
+            "ListPools" => handle_list_pools(&pool_manager, &request).await,
+            _ => make_error_response(
+                &request.request_id,
+                &format!("Unknown request type: {}", request.request_type),
+            ),
         };
 
-        // Send binary response: length (4 bytes) + JSON
-        let response_json = serde_json::to_string(&response)?;
-        let response_bytes = response_json.as_bytes();
-        let response_len = response_bytes.len() as u32;
-
-        write_half.write_all(&response_len.to_le_bytes()).await?;
-        write_half.write_all(response_bytes).await?;
+        send_response(&mut write_half, &response).await?;
     }
 
-    // Connection closed - clean up resources in all pools
     eprintln!("Connection closed: {} - cleaning up resources", conn_id);
-    // Note: We can't clean up specific connections across all pools here
-    // Connections are pool-specific and should be cleaned up by the pool when needed
-
     Ok(())
+}
+
+/// Send a length-prefixed JSON response over the socket.
+async fn send_response(
+    write_half: &mut tokio::net::unix::OwnedWriteHalf,
+    response: &ContextResponse,
+) -> Result<()> {
+    let response_json = serde_json::to_string(response)?;
+    let response_bytes = response_json.as_bytes();
+    let response_len = response_bytes.len() as u32;
+    write_half.write_all(&response_len.to_le_bytes()).await?;
+    write_half.write_all(response_bytes).await?;
+    Ok(())
+}
+
+fn make_error_response(request_id: &str, error: &str) -> ContextResponse {
+    ContextResponse {
+        response_type: "error".to_string(),
+        request_id: request_id.to_string(),
+        success: false,
+        data: serde_json::json!({ "error": error }),
+    }
 }
 
 async fn handle_add_memory_context(
     layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
-    conn_id: &str
+    conn_id: &str,
+    content_id_map: &ContentIdMap,
+    pool_id: &str,
 ) -> ContextResponse {
-    // Extract memory_id and context from payload
     let memory_id = request.payload.get("memory_id")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    
+
     let content = request.payload.get("content")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    
+
     let context = request.payload.get("context")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter()
@@ -195,12 +196,19 @@ async fn handle_add_memory_context(
             .collect::<Vec<String>>())
         .unwrap_or_default();
 
+    // Store content -> memory_id mapping for PredictContext lookups
+    {
+        let mut map = content_id_map.write().await;
+        let pool_map = map.entry(pool_id.to_string()).or_insert_with(HashMap::new);
+        pool_map.insert(content.to_string(), memory_id as u64);
+    }
+
     // Add memory access to temporal analyzer with connection tracking
     layer.add_memory_access_with_connection(
         memory_id as u64,
         content,
         &context,
-        Some(conn_id.to_string())
+        Some(conn_id.to_string()),
     ).await;
 
     ContextResponse {
@@ -213,14 +221,16 @@ async fn handle_add_memory_context(
             "context_added": context.len(),
             "timestamp": current_timestamp(),
             "connection_id": conn_id
-        })
+        }),
     }
 }
 
 async fn handle_predict_context(
     layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
-    _conn_id: &str
+    _conn_id: &str,
+    content_id_map: &ContentIdMap,
+    pool_id: &str,
 ) -> ContextResponse {
     let current_context = request.payload.get("current_context")
         .and_then(|v| v.as_array())
@@ -234,45 +244,88 @@ async fn handle_predict_context(
         .and_then(|v| v.as_u64())
         .unwrap_or(5) as usize;
 
-    // Use the direct prediction path that reads from the temporal analyzer's
-    // actual access window, rather than going through MfnLayer::search() which
-    // requires start_memory_ids (the client sends string contexts, not memory IDs).
-    let predictions = layer.predict_from_recent(sequence_length).await;
+    // Resolve current_context text strings to memory IDs via the content map
+    let (start_memory_ids, id_to_content) = {
+        let map = content_id_map.read().await;
+        let mut ids = Vec::new();
+        let mut reverse_map: HashMap<u64, String> = HashMap::new();
 
-    let prediction_json: Vec<serde_json::Value> = predictions
-        .iter()
-        .map(|pred| serde_json::json!({
-            "memory_id": pred.memory_id,
+        if let Some(pool_map) = map.get(pool_id) {
+            // Build reverse map: memory_id -> content text
+            for (text, &id) in pool_map.iter() {
+                reverse_map.insert(id, text.clone());
+            }
+            // Resolve each context string to its memory_id
+            for text in &current_context {
+                if let Some(&id) = pool_map.get(text.as_str()) {
+                    ids.push(id);
+                }
+            }
+        }
+        (ids, reverse_map)
+    };
+
+    let resolved_count = start_memory_ids.len();
+    let context_count = current_context.len();
+
+    // Use the temporal analyzer directly for prediction
+    let predictions = if !start_memory_ids.is_empty() {
+        let context = layer4_cpe::temporal::PredictionContext {
+            recent_sequence: Some(start_memory_ids.clone()),
+            current_timestamp: current_timestamp(),
+            user_context: Some(current_context.join(" ")),
+            session_id: None,
+            max_predictions: sequence_length,
+            connection_id: None,
+        };
+        let analyzer = layer.get_analyzer().await;
+        analyzer.predict_next(&context)
+    } else {
+        // Fallback: use predict_from_recent which reads from the analyzer's access window
+        layer.predict_from_recent(sequence_length).await
+    };
+
+    // Convert predictions to JSON with actual content text
+    let results: Vec<serde_json::Value> = predictions.iter().map(|pred| {
+        let content = id_to_content.get(&pred.memory_id)
+            .cloned()
+            .unwrap_or_else(|| format!("memory_{}", pred.memory_id));
+        serde_json::json!({
+            "content": content,
+            "predicted_content": content,
             "confidence": pred.confidence,
+            "probability": pred.confidence,
+            "memory_id": pred.memory_id,
             "prediction_type": format!("{:?}", pred.prediction_type),
             "estimated_time_us": pred.estimated_time_us,
             "contributing_evidence": pred.contributing_evidence,
-        }))
-        .collect();
+        })
+    }).collect();
 
     ContextResponse {
         response_type: "PredictContext_Response".to_string(),
         request_id: request.request_id.clone(),
         success: true,
         data: serde_json::json!({
-            "predictions": prediction_json,
+            "predictions": results,
             "context": current_context,
             "predicted_sequence_length": sequence_length,
-            "total_predictions": prediction_json.len()
-        })
+            "total_predictions": results.len(),
+            "resolved_memory_ids": resolved_count,
+            "total_context_strings": context_count
+        }),
     }
 }
 
 async fn handle_get_context_history(
     _layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
-    _conn_id: &str
+    _conn_id: &str,
 ) -> ContextResponse {
     let memory_id = request.payload.get("memory_id")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    
-    // This would retrieve actual context history from the layer
+
     ContextResponse {
         response_type: "GetContextHistory_Response".to_string(),
         request_id: request.request_id.clone(),
@@ -282,7 +335,7 @@ async fn handle_get_context_history(
             "history": [],
             "total_accesses": 0,
             "pattern_strength": 0.0
-        })
+        }),
     }
 }
 
@@ -295,7 +348,7 @@ async fn handle_ping(request: &ContextRequest) -> ContextResponse {
             "timestamp": current_timestamp(),
             "layer": "Layer4_CPE",
             "status": "operational"
-        })
+        }),
     }
 }
 
@@ -307,14 +360,9 @@ async fn handle_health_check(
 ) -> ContextResponse {
     let timestamp = current_timestamp();
     let uptime_seconds = server_start_time.elapsed().as_secs();
-
-    // Get memory stats from the layer
     let memory_stats = layer.get_memory_stats().await;
-
-    // Get pool count
     let pool_count = pool_manager.pool_count().await;
 
-    // Get actual metrics from the layer
     let metrics = serde_json::json!({
         "memory_stats": memory_stats,
         "uptime_seconds": uptime_seconds,
@@ -334,7 +382,7 @@ async fn handle_health_check(
             "pool_count": pool_count,
             "metrics": metrics,
             "memory_info": memory_stats,
-        })
+        }),
     }
 }
 
@@ -352,7 +400,7 @@ async fn handle_list_pools(
         data: serde_json::json!({
             "pools": pools,
             "pool_count": pool_count,
-        })
+        }),
     }
 }
 
@@ -386,14 +434,16 @@ mod uuid {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    println!("🧠 Starting Layer 4 CPE Socket Server (Multi-Pool)");
-    println!("🎯 Target: Context prediction and temporal analysis");
-    println!("🔗 Socket: /tmp/mfn_test_layer4.sock");
+    let socket_path_str = std::env::var("MFN_SOCKET_PATH")
+        .unwrap_or_else(|_| "/tmp/mfn_test_layer4.sock".to_string());
+
+    println!("Starting Layer 4 CPE Socket Server (Multi-Pool)");
+    println!("Target: Context prediction and temporal analysis");
+    println!("Socket: {}", socket_path_str);
 
     // Create data directory for all pools
     let data_dir = PathBuf::from(
@@ -402,41 +452,41 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| "./data/mfn/memory/layer4_cpe".to_string()),
     );
     std::fs::create_dir_all(&data_dir)?;
-    println!("💾 Multi-pool persistence enabled: {}", data_dir.display());
-    println!("📦 Default pool: crucible_training");
+    println!("Multi-pool persistence enabled: {}", data_dir.display());
+    println!("Default pool: crucible_training");
 
     // Create PoolManager
     let config = ContextPredictionConfig::default();
     let pool_manager = Arc::new(PoolManager::new(data_dir, config));
 
+    // Create content-to-memory-ID mapping shared across all connections
+    let content_id_map: ContentIdMap = Arc::new(RwLock::new(HashMap::new()));
+
     // Remove existing socket file
-    let socket_path = "/tmp/mfn_test_layer4.sock";
+    let socket_path = socket_path_str.as_str();
     if std::path::Path::new(socket_path).exists() {
         std::fs::remove_file(socket_path)?;
     }
 
-    // Bind to Unix socket
     let listener = UnixListener::bind(socket_path)?;
-    println!("✅ Layer 4 CPE socket server listening on {}", socket_path);
-    println!("🔮 Operations: AddMemoryContext, PredictContext, GetContextHistory, Ping, HealthCheck, ListPools");
+    println!("Layer 4 CPE socket server listening on {}", socket_path);
+    println!("Operations: AddMemoryContext, PredictContext, GetContextHistory, Ping, HealthCheck, ListPools");
 
-    // Track server start time for health checks
     let server_start_time = std::time::Instant::now();
+    let socket_path_cleanup = socket_path_str.clone();
 
-    // Handle graceful shutdown
     tokio::select! {
-        result = serve_connections(listener, pool_manager, server_start_time) => {
+        result = serve_connections(listener, pool_manager, server_start_time, content_id_map) => {
             if let Err(e) = result {
-                eprintln!("❌ Server error: {}", e);
+                eprintln!("Server error: {}", e);
             }
         }
         _ = tokio::signal::ctrl_c() => {
-            println!("\n🛑 Shutdown signal received, stopping server gracefully...");
-            // Clean up socket file
-            if std::path::Path::new(socket_path).exists() {
-                std::fs::remove_file(socket_path)?;
+            println!("\nShutdown signal received, stopping server gracefully...");
+            if std::path::Path::new(&socket_path_cleanup).exists() {
+                std::fs::remove_file(&socket_path_cleanup)?;
             }
-            println!("✅ Server stopped successfully");
+            println!("Server stopped successfully");
         }
     }
 
@@ -447,13 +497,17 @@ async fn serve_connections(
     listener: UnixListener,
     pool_manager: Arc<PoolManager>,
     server_start_time: std::time::Instant,
+    content_id_map: ContentIdMap,
 ) -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let pool_manager_clone = Arc::clone(&pool_manager);
+        let content_id_map_clone = Arc::clone(&content_id_map);
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, pool_manager_clone, server_start_time).await {
+            if let Err(e) = handle_connection(
+                stream, pool_manager_clone, server_start_time, content_id_map_clone,
+            ).await {
                 eprintln!("Connection error: {}", e);
             }
         });

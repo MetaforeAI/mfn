@@ -264,6 +264,11 @@ impl ContextPredictionLayer {
         eprintln!("CPE: Cleaned up resources for connection {}", conn_id);
     }
 
+    /// Get a lock on the temporal analyzer for direct access
+    pub async fn get_analyzer(&self) -> tokio::sync::MutexGuard<'_, TemporalAnalyzer> {
+        self.analyzer.lock().await
+    }
+
     /// Get memory statistics
     pub async fn get_memory_stats(&self) -> String {
         let analyzer = self.analyzer.lock().await;
