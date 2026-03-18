@@ -24,7 +24,7 @@ df -h    # Required: 20GB+ disk space
 
 ```bash
 # Clone and deploy in one command
-git clone https://github.com/your-org/telepathy.git && \
+git clone https://github.com/NeoTecDigital/telepathy.git && \
 cd telepathy && \
 make deploy
 ```
@@ -424,7 +424,7 @@ rm -rf data/ logs/ backups/
 ## Next Steps
 
 1. **Read Full Documentation:** See `DEPLOYMENT.md` for detailed guide
-2. **Review Architecture:** See `MFN_TECHNICAL_ANALYSIS_REPORT.md`
+2. **Review Architecture:** See `docs/architecture/`
 3. **Run Tests:** `cargo test --release --all`
 4. **Monitor Metrics:** Open dashboard at http://localhost:3000
 5. **Check Logs:** `make logs` for real-time monitoring

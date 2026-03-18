@@ -1,7 +1,7 @@
 # MFN API Reference
 
 **Version:** 0.1.0
-**Status:** Alpha Testing (~95% Complete)
+**Status:** Active Development
 
 Complete API reference for the Memory Flow Network (MFN) system.
 
@@ -896,8 +896,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## See Also
 
 - [USER_GUIDE.md](USER_GUIDE.md) - Complete usage guide
-- [MFN_INTEGRATION_COMPLETE.md](MFN_INTEGRATION_COMPLETE.md) - Integration status
-- [MFN_TECHNICAL_ANALYSIS_REPORT.md](MFN_TECHNICAL_ANALYSIS_REPORT.md) - Technical analysis
+- [PROTOCOL_SPECIFICATION.md](PROTOCOL_SPECIFICATION.md) - Protocol specification
+- [docs/architecture/](docs/architecture/) - Architecture documentation
 
 ---
 

@@ -42,11 +42,11 @@ impl SearchEngine {
 
         for pattern in storage.pattern_ids().iter() {
             if let Some(p) = storage.get(pattern) {
-                if p.confidence < min_confidence {
+                let similarity = cosine_similarity(&query_normalized, &p.embedding);
+                if similarity < min_confidence {
                     continue;
                 }
 
-                let similarity = cosine_similarity(&query_normalized, &p.embedding);
                 results.push((p.id.clone(), similarity, p.clone()));
             }
         }
@@ -127,21 +127,24 @@ mod tests {
     }
 
     #[test]
-    fn test_search_confidence_filter() {
+    fn test_search_similarity_filter() {
         let storage = Arc::new(RwLock::new(PatternStorage::new()));
         let engine = SearchEngine::new(storage.clone());
 
-        let embedding = vec![1.0, 0.0, 0.0];
+        let query = vec![1.0, 0.0, 0.0];
 
-        storage.write().store(create_test_pattern("p1", "Pattern 1", embedding.clone(), 0.9)).unwrap();
-        storage.write().store(create_test_pattern("p2", "Pattern 2", embedding.clone(), 0.5)).unwrap();
-        storage.write().store(create_test_pattern("p3", "Pattern 3", embedding.clone(), 0.7)).unwrap();
+        // p1: identical to query (similarity ~1.0)
+        storage.write().store(create_test_pattern("p1", "Pattern 1", vec![1.0, 0.0, 0.0], 0.5)).unwrap();
+        // p2: orthogonal to query (similarity ~0.0)
+        storage.write().store(create_test_pattern("p2", "Pattern 2", vec![0.0, 1.0, 0.0], 0.9)).unwrap();
+        // p3: partially similar to query (similarity ~0.7)
+        storage.write().store(create_test_pattern("p3", "Pattern 3", vec![1.0, 1.0, 0.0], 0.9)).unwrap();
 
-        // Filter out patterns with confidence < 0.6
-        let results = engine.search(&embedding, 10, 0.6).unwrap();
+        // Filter out patterns with similarity < 0.6
+        let results = engine.search(&query, 10, 0.6).unwrap();
 
-        assert_eq!(results.len(), 2); // Only p1 (0.9) and p3 (0.7)
-        assert!(results.iter().all(|r| r.2.confidence >= 0.6));
+        assert_eq!(results.len(), 2); // Only p1 (~1.0) and p3 (~0.7) pass similarity threshold
+        assert!(results.iter().all(|r| r.1 >= 0.6)); // Check similarity score, not confidence
     }
 
     #[test]

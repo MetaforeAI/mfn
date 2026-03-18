@@ -406,16 +406,23 @@ class MFNOrchestrator:
         )
     
     def _add_to_layer4(self, memory_id: Optional[int], content: str, context: List[str]) -> Dict[str, Any]:
-        """Add memory context to Layer 4 via unified binary protocol"""
-        socket_path = self.layer_configs['layer4']['socket']
-        return send_unified_request(
-            socket_path=socket_path,
-            request_type="add_memory",
-            memory_id=memory_id or 0,
-            content=content,
-            tags=context,
-            metadata={"context": context}
-        )
+        """Add memory context to Layer 4 via binary protocol"""
+        message = {
+            "type": "AddMemoryContext",
+            "request_id": f"orch_{int(time.time() * 1000)}",
+            "pool_id": "discord_unified",
+            "memory_id": memory_id or 0,
+            "content": content,
+            "context": context,
+        }
+
+        result = self._send_binary_socket_message('layer4', message)
+        if result.get('success'):
+            response = result.get('response', {})
+            if response.get('type') == 'AddMemoryContext_Response' and response.get('success'):
+                return {"success": True, "context_added": response.get('context_added', 0)}
+            return {"success": False, "error": f"Unexpected response: {response.get('type', 'unknown')}"}
+        return result
     
     def _text_to_embedding(self, text: str) -> List[float]:
         """Convert text to embedding vector for Layer 2.
@@ -475,15 +482,22 @@ class MFNOrchestrator:
             return {"success": False, "error": str(e)}
             
     def _predict_layer4(self, context: List[str], sequence_length: int) -> Dict[str, Any]:
-        """Get context predictions from Layer 4 via unified protocol"""
-        socket_path = self.layer_configs['layer4']['socket']
-        return send_unified_query(
-            socket_path=socket_path,
-            query_type="predict",
-            content=" ".join(context),
-            top_k=sequence_length,
-            metadata={"current_context": context}
-        )
+        """Get context predictions from Layer 4 via binary protocol"""
+        message = {
+            "type": "PredictContext",
+            "request_id": f"orch_{int(time.time() * 1000)}",
+            "pool_id": "discord_unified",
+            "current_context": context,
+            "sequence_length": sequence_length,
+        }
+
+        result = self._send_binary_socket_message('layer4', message)
+        if result.get('success'):
+            response = result.get('response', {})
+            if response.get('type') == 'PredictContext_Response' and response.get('success'):
+                return {"success": True, "predictions": response.get('predictions', []), "context": response.get('context', [])}
+            return {"success": False, "error": f"Unexpected response: {response.get('type', 'unknown')}"}
+        return result
 
     def _add_to_layer5(self, memory_id: Optional[int], content: str, tags: List[str] = None) -> Dict[str, Any]:
         """Add pattern to Layer 5 (PSR) via binary protocol"""

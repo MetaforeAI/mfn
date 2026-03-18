@@ -65,7 +65,7 @@ The Memory Flow Network implements a revolutionary 5-layer memory architecture:
 
 **Performance Measurement Context**:
 - Numbers shown: Socket IPC latency per layer
-- End-to-end system: 90-130µs average (validated in REAL_PERFORMANCE_RESULTS.md)
+- End-to-end system: 90-130µs average
 - System throughput: 983.7 req/s (10K memory benchmark)
 
 ## System Components

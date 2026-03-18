@@ -152,7 +152,7 @@ pub enum AssociationType {
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/telepathy.git
+git clone https://github.com/NeoTecDigital/telepathy.git
 cd telepathy
 cargo build --release
 ```
@@ -501,7 +501,7 @@ let results = orchestrator.search(&query).await?;
 
 ### Getting Help
 
-- **GitHub Issues:** https://github.com/yourusername/telepathy/issues
+- **GitHub Issues:** https://github.com/NeoTecDigital/telepathy/issues
 - **Documentation:** https://docs.rs/mfn-core
 - **Examples:** `examples/` directory in repository
 
@@ -512,7 +512,7 @@ let results = orchestrator.search(&query).await?;
 1. **Read the [API Reference](API_REFERENCE.md)** for detailed function documentation
 2. **Explore examples** in `/examples` directory
 3. **Check performance benchmarks** in `/benches` directory
-4. **Review architecture** in `MFN_TECHNICAL_ANALYSIS_REPORT.md`
+4. **Review architecture** in `docs/architecture/`
 
 ---
 

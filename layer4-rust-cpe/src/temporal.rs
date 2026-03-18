@@ -688,12 +688,13 @@ impl TemporalAnalyzer {
 
         // Analyze recent access window for new patterns
         let window_size = self.access_window.len().min(50); // Analyze last 50 accesses
-        let recent_accesses: Vec<MemoryAccess> = self.access_window
+        let mut recent_accesses: Vec<MemoryAccess> = self.access_window
             .iter()
             .rev()
             .take(window_size)
             .cloned()
             .collect();
+        recent_accesses.reverse(); // Convert to chronological order
 
         // Look for repeating subsequences
         for length in 3..=8.min(self.config.max_ngram_length) {

@@ -9,7 +9,7 @@ All layers use Unix domain sockets with binary protocol support:
 - **Layer 2 DSR**: `/tmp/mfn_layer2.sock` (Rust)
 - **Layer 3 ALM**: `/tmp/mfn_layer3.sock` (Go)
 - **Layer 4 CPE**: `/tmp/mfn_layer4.sock` (Rust)
-- **Layer 5 PSR**: `/tmp/mfn_layer5.sock` (Rust) - **SOCKET SERVER NOT YET IMPLEMENTED**
+- **Layer 5 PSR**: `/tmp/mfn_layer5.sock` (Rust)
 
 ## Common Protocol Features
 
@@ -706,24 +706,14 @@ BinaryMessageHeader {
 
 **Socket**: `/tmp/mfn_layer5.sock`  
 **Language**: Rust  
-**Status**: **SOCKET SERVER NOT YET IMPLEMENTED**  
+**Status**: Implemented
 **Performance Target**: <1ms pattern storage, <5ms similarity search
 
-### Current Status
-- Pattern registry initialized with persistence
-- Socket server implementation pending
-- Server starts but does not accept connections
-
-### Planned Protocol
-Expected to follow Layer 2/4 pattern:
+### Protocol
+Follows the Layer 2/4 pattern:
 - Binary protocol: 4-byte length + JSON
 - Multi-pool support via `pool_id`
 - Pattern storage and similarity operations
-
-### Implementation Location
-`/home/persist/alembic/mfn/layer5-rust-psr/src/bin/layer5_socket_server.rs`
-
-Currently only initializes `PatternRegistry` with persistence, no socket handling implemented.
 
 ---
 
@@ -879,5 +869,5 @@ To complete Layer 5 PSR socket server:
 5. Add connection cleanup for pattern data
 
 Reference implementations:
-- `/home/persist/alembic/mfn/layer2-rust-dsr/src/socket_server.rs`
-- `/home/persist/alembic/mfn/layer4-rust-cpe/src/bin/layer4_socket_server.rs`
+- `mfn-layer2-rust/src/socket_server.rs`
+- `mfn-layer4-rust/src/bin/layer4_socket_server.rs`

@@ -242,11 +242,11 @@ See the [examples](examples/) directory for complete implementations and integra
 
 ## 🔗 Related Projects
 
-- **[mfn-layer1-zig](https://github.com/TheAgencyInstitute/mfn-layer1-zig)** - Zig implementation of IFR
-- **[mfn-layer2-rust](https://github.com/TheAgencyInstitute/mfn-layer2-rust)** - Rust spiking neural network DSR  
-- **[mfn-layer3-go](https://github.com/TheAgencyInstitute/mfn-layer3-go)** - Go graph-based ALM
-- **[mfn-layer4-rust](https://github.com/TheAgencyInstitute/mfn-layer4-rust)** - Rust context prediction CPE
-- **[mfn-integration](https://github.com/TheAgencyInstitute/mfn-integration)** - Full system integration and examples
+- **[mfn-layer1-zig](https://github.com/NeoTecDigital/mfn-layer1-zig)** - Zig implementation of IFR
+- **[mfn-layer2-rust](https://github.com/NeoTecDigital/mfn-layer2-rust)** - Rust spiking neural network DSR  
+- **[mfn-layer3-go](https://github.com/NeoTecDigital/mfn-layer3-go)** - Go graph-based ALM
+- **[mfn-layer4-rust](https://github.com/NeoTecDigital/mfn-layer4-rust)** - Rust context prediction CPE
+- **[mfn-integration](https://github.com/NeoTecDigital/mfn-integration)** - Full system integration and examples
 
 ## 📝 License
 

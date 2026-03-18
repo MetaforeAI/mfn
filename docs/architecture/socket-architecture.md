@@ -156,7 +156,7 @@ impl DSRSocketServer {
 
 **Current State**: **COMPLETE** - Go implementation with optimized Unix socket
 
-**Existing Implementation**: `/home/persist/repos/telepathy/layer3-go-alm/internal/ffi/ffi.go`
+**Existing Implementation**: `layer3-go-alm/internal/ffi/ffi.go`
 
 **Performance**: 0.13ms average, 6,305 RPS capacity
 

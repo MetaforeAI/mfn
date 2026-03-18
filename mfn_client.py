@@ -865,8 +865,7 @@ class MFNClient:
 
         response = self._binary_request(4, payload)
         if response and response.get("success"):
-            data = response.get("data", {})
-            logger.debug(f"CPE add_context succeeded: context_added={data.get('context_added')}")
+            logger.debug(f"CPE add_context succeeded: context_added={response.get('context_added')}")
             return True
         return False
 
@@ -899,8 +898,7 @@ class MFNClient:
 
         response = self._binary_request(4, payload)
         if response and response.get("success"):
-            data = response.get("data", {})
-            predictions = data.get("predictions", [])
+            predictions = response.get("predictions", [])
             logger.debug(f"CPE predict returned {len(predictions)} predictions")
             return predictions
         return None

@@ -340,6 +340,9 @@ func (alm *ALM) SearchByText(ctx context.Context, queryText string, maxResults i
 		}, nil
 	}
 
+	alm.mu.RLock()
+	defer alm.mu.RUnlock()
+
 	allMemories := alm.graph.GetAllMemories()
 
 	if len(allMemories) == 0 {
