@@ -154,31 +154,12 @@ impl SpikeDynamics {
         Ok(result)
     }
 
-    /// Convert spike pattern to binned activity sequence
+    /// Convert embedding pattern to activity sequence.
+    /// With direct embedding storage, this produces a single activity frame
+    /// from the embedding values (no spike times).
     fn convert_to_activity_sequence(&self, pattern: &SpikePattern) -> Result<Vec<Array1<f32>>> {
-        let time_bins = (pattern.duration_ms / self.window.resolution_ms) as usize;
-        let mut activity_sequence = Vec::with_capacity(time_bins);
-
-        for bin in 0..time_bins {
-            let bin_start = bin as f32 * self.window.resolution_ms;
-            let bin_end = bin_start + self.window.resolution_ms;
-            
-            let mut activity = Array1::zeros(pattern.neuron_count);
-
-            // Count spikes in this time bin for each neuron
-            for (neuron_id, spike_times) in pattern.spike_times.iter().enumerate() {
-                let spikes_in_bin = spike_times
-                    .iter()
-                    .filter(|&&spike_time| spike_time >= bin_start && spike_time < bin_end)
-                    .count();
-
-                activity[neuron_id] = spikes_in_bin as f32;
-            }
-
-            activity_sequence.push(activity);
-        }
-
-        Ok(activity_sequence)
+        let activity = Array1::from_vec(pattern.embedding.clone());
+        Ok(vec![activity])
     }
 
     /// Calculate comprehensive temporal features

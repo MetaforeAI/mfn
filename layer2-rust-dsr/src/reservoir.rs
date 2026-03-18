@@ -1,788 +1,49 @@
-//! Spiking Neural Network Reservoir for Dynamic Similarity Detection
-//! 
-//! Implements a Liquid State Machine (LSM) architecture where:
-//! - Reservoir topology is fixed (no training required)
-//! - Memories create dynamic "similarity wells" as attractors
-//! - Competitive dynamics enable winner-take-all similarity detection
-//! - Temporal integration provides robust pattern matching
+//! Vector store for DSR Layer 2.
+//!
+//! Replaces the spiking neural network reservoir with direct SIMD-accelerated
+//! cosine similarity search. Uses LRU eviction with Markov chain access
+//! pattern tracking for spatial/temporal locality.
 
-use ndarray::{Array1, Array2, ArrayView1};
-use anyhow::{Result, anyhow};
+use crate::encoding::SpikePattern;
+use crate::persistence::WellSnapshot;
+use crate::similarity::simd_cosine_similarity;
+use crate::{DSRConfig, MemoryId};
+use anyhow::Result;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use parking_lot::RwLock;
-use rand::Rng;
-use rand_distr::{Normal, Distribution};
-use std::time::{Duration, Instant};
+use std::time::Instant;
+use tracing::{debug, info, warn};
 
-use crate::{DSRConfig, MemoryId, SpikePattern};
+// ============================================================
+// Stored entry
+// ============================================================
 
-/// State of individual neurons in the reservoir
+/// A stored memory entry with embedding and access metadata.
 #[derive(Debug, Clone)]
-pub struct NeuronState {
-    /// Current membrane potential
-    pub potential: f32,
-    /// Last spike time (milliseconds)
-    pub last_spike_time: f32,
-    /// Refractory period remaining (milliseconds)
-    pub refractory_period: f32,
-    /// Accumulated input current
-    pub input_current: f32,
-    /// Neuron type: excitatory (true) or inhibitory (false)
-    pub is_excitatory: bool,
-}
-
-impl NeuronState {
-    pub fn new(is_excitatory: bool) -> Self {
-        Self {
-            potential: -70.0, // Resting potential in mV
-            last_spike_time: -1000.0, // Initialize to distant past
-            refractory_period: 0.0,
-            input_current: 0.0,
-            is_excitatory,
-        }
-    }
-
-    /// Reset neuron to resting state
-    pub fn reset(&mut self) {
-        self.potential = -70.0;
-        self.input_current = 0.0;
-        self.refractory_period = 0.0;
-    }
-}
-
-/// Represents a synaptic connection between neurons
-#[derive(Debug, Clone)]
-pub struct Synapse {
-    /// Target neuron index
-    pub target: usize,
-    /// Synaptic weight (positive for excitatory, negative for inhibitory)
-    pub weight: f32,
-    /// Synaptic delay (milliseconds)
-    pub delay: f32,
-}
-
-/// Dynamic similarity well that represents a stored memory
-#[derive(Debug, Clone)]
-pub struct SimilarityWell {
-    /// Unique identifier for this memory
+pub struct StoredEntry {
     pub memory_id: MemoryId,
-    /// Spike pattern that created this well
-    pub reference_pattern: SpikePattern,
-    /// Content/metadata associated with this memory
+    pub embedding: Vec<f32>,
+    pub l2_norm: f32,
     pub content: String,
-    /// Attractor strength (how strongly it pulls similar patterns)
-    pub strength: f32,
-    /// Number of times this well has been activated
-    pub activation_count: u64,
-    /// Last activation time
-    pub last_activated: std::time::Instant,
-    /// Last access time (for LRU tracking)
-    pub last_accessed: std::time::Instant,
-    /// Creation time (for TTL tracking)
-    pub created_at: std::time::Instant,
-    /// Connection ID that created this well (for cleanup on disconnect)
     pub connection_id: Option<String>,
-    /// Readout weights connecting reservoir to this well
-    pub readout_weights: Array1<f32>,
-    /// Number of entries in this well (for limiting per-well size)
-    pub entry_count: usize,
+    pub created_at: Instant,
+    pub last_accessed: Instant,
+    pub access_count: u64,
+    pub strength: f32,
 }
 
-impl SimilarityWell {
-    pub fn new(
-        memory_id: MemoryId,
-        reference_pattern: SpikePattern,
-        content: String,
-        reservoir_size: usize,
-        connection_id: Option<String>,
-    ) -> Self {
-        // Initialize readout weights randomly with small values
-        let mut rng = rand::thread_rng();
-        let normal = Normal::new(0.0, 0.01).unwrap();
-        let readout_weights = Array1::from_vec(
-            (0..reservoir_size)
-                .map(|_| normal.sample(&mut rng) as f32)
-                .collect()
-        );
+/// Backward compatibility alias.
+pub type SimilarityWell = StoredEntry;
 
-        let now = std::time::Instant::now();
-        Self {
-            memory_id,
-            reference_pattern,
-            content,
-            strength: 1.0,
-            activation_count: 0,
-            last_activated: now,
-            last_accessed: now,
-            created_at: now,
-            connection_id,
-            readout_weights,
-            entry_count: 1,
-        }
-    }
+/// Backward compatibility stub (referenced in lib.rs re-export).
+pub type NeuronState = ();
 
-    /// Update the well based on activation patterns
-    pub fn update_from_activation(&mut self, reservoir_activity: &[f32], learning_rate: f32) {
-        self.activation_count += 1;
-        let now = std::time::Instant::now();
-        self.last_activated = now;
-        self.last_accessed = now;
+// ============================================================
+// Memory statistics
+// ============================================================
 
-        // Simple Hebbian learning for readout weights
-        for (weight, &activity) in self.readout_weights.iter_mut().zip(reservoir_activity.iter()) {
-            *weight += learning_rate * activity * self.strength;
-
-            // Clip weights to prevent runaway growth
-            *weight = weight.clamp(-1.0, 1.0);
-        }
-    }
-
-    /// Calculate activation strength given current reservoir state
-    pub fn calculate_activation(&mut self, reservoir_activity: &[f32]) -> f32 {
-        // Update last accessed time when calculating activation
-        self.last_accessed = std::time::Instant::now();
-
-        // Dot product of readout weights with reservoir activity
-        self.readout_weights
-            .iter()
-            .zip(reservoir_activity.iter())
-            .map(|(&weight, &activity)| weight * activity)
-            .sum::<f32>()
-            .max(0.0) // ReLU activation
-    }
-}
-
-/// Main similarity reservoir implementation
-pub struct SimilarityReservoir {
-    config: DSRConfig,
-
-    // Reservoir structure (fixed topology)
-    neurons: Vec<NeuronState>,
-    synapses: Vec<Vec<Synapse>>, // Adjacency list representation
-
-    // Dynamic similarity wells
-    similarity_wells: HashMap<MemoryId, SimilarityWell>,
-
-    // Memory management
-    lru_queue: VecDeque<MemoryId>,  // Track LRU order
-    connection_wells: HashMap<String, Vec<MemoryId>>,  // Track wells per connection
-    max_wells: usize,  // Maximum number of wells
-    max_entries_per_well: usize,  // Maximum entries per well
-    ttl_seconds: u64,  // TTL for wells in seconds
-
-    // Simulation state
-    current_time: f32,
-    time_step: f32, // Integration time step in milliseconds
-
-    // Performance tracking
-    total_spikes: u64,
-    wells_created: u64,
-    wells_evicted: u64,
-    memory_usage_bytes: usize,
-}
-
-impl SimilarityReservoir {
-    pub fn new(config: DSRConfig) -> Result<Self> {
-        // Use max_similarity_wells from config, or default to 100K
-        let max_wells = if config.max_similarity_wells > 0 {
-            config.max_similarity_wells
-        } else {
-            100_000  // Default 100K wells limit
-        };
-
-        let mut reservoir = Self {
-            config: config.clone(),
-            neurons: Vec::new(),
-            synapses: vec![Vec::new(); config.reservoir_size],
-            similarity_wells: HashMap::new(),
-            lru_queue: VecDeque::new(),
-            connection_wells: HashMap::new(),
-            max_wells,
-            max_entries_per_well: 1000,  // Default 1K entries per well
-            ttl_seconds: 3600,  // Default 1 hour TTL
-            current_time: 0.0,
-            time_step: 0.1, // 0.1ms time step
-            total_spikes: 0,
-            wells_created: 0,
-            wells_evicted: 0,
-            memory_usage_bytes: 0,
-        };
-
-        reservoir.initialize_reservoir()?;
-        Ok(reservoir)
-    }
-
-    /// Initialize the fixed reservoir topology
-    fn initialize_reservoir(&mut self) -> Result<()> {
-        let mut rng = rand::thread_rng();
-        
-        // Create neurons (80% excitatory, 20% inhibitory as in biological networks)
-        for i in 0..self.config.reservoir_size {
-            let is_excitatory = i < (self.config.reservoir_size * 4) / 5;
-            self.neurons.push(NeuronState::new(is_excitatory));
-        }
-
-        // Create sparse random connectivity (10% connection probability)
-        let connection_prob = 0.1;
-        let weight_std = 0.5;
-        let normal_weight = Normal::new(0.0, weight_std).unwrap();
-
-        for source in 0..self.config.reservoir_size {
-            for target in 0..self.config.reservoir_size {
-                if source != target && rng.gen::<f32>() < connection_prob {
-                    let base_weight = normal_weight.sample(&mut rng) as f32;
-                    
-                    // Excitatory neurons have positive weights, inhibitory negative
-                    let weight = if self.neurons[source].is_excitatory {
-                        base_weight.abs() * 2.0 // Stronger excitatory connections
-                    } else {
-                        -base_weight.abs() * 5.0 // Stronger inhibitory connections
-                    };
-
-                    let delay = 1.0 + rng.gen::<f32>() * 3.0; // 1-4ms delay
-
-                    self.synapses[source].push(Synapse {
-                        target,
-                        weight,
-                        delay,
-                    });
-                }
-            }
-        }
-
-        tracing::info!(
-            reservoir_size = self.config.reservoir_size,
-            excitatory_count = self.neurons.iter().filter(|n| n.is_excitatory).count(),
-            inhibitory_count = self.neurons.iter().filter(|n| !n.is_excitatory).count(),
-            total_synapses = self.synapses.iter().map(|s| s.len()).sum::<usize>(),
-            "Reservoir topology initialized"
-        );
-
-        Ok(())
-    }
-
-    /// Create a new similarity well for a memory with connection tracking
-    pub fn create_similarity_well(
-        &mut self,
-        memory_id: MemoryId,
-        reference_pattern: SpikePattern,
-        content: String,
-    ) -> Result<()> {
-        self.create_similarity_well_with_connection(memory_id, reference_pattern, content, None)
-    }
-
-    /// Create a new similarity well for a memory with optional connection ID
-    pub fn create_similarity_well_with_connection(
-        &mut self,
-        memory_id: MemoryId,
-        reference_pattern: SpikePattern,
-        content: String,
-        connection_id: Option<String>,
-    ) -> Result<()> {
-        if self.similarity_wells.contains_key(&memory_id) {
-            return Err(anyhow!("Memory {} already exists in reservoir", memory_id.0));
-        }
-
-        // Check if we've reached max wells limit
-        if self.similarity_wells.len() >= self.max_wells {
-            // Evict LRU well
-            self.evict_lru_well();
-        }
-
-        // Clean up expired wells before adding new one
-        self.cleanup_expired_wells();
-
-        let well = SimilarityWell::new(
-            memory_id,
-            reference_pattern,
-            content,
-            self.config.reservoir_size,
-            connection_id.clone(),
-        );
-
-        // Update memory usage estimate
-        let well_size = self.estimate_well_size(&well);
-        self.memory_usage_bytes += well_size;
-
-        // Track connection ownership
-        if let Some(conn_id) = &connection_id {
-            self.connection_wells
-                .entry(conn_id.clone())
-                .or_insert_with(Vec::new)
-                .push(memory_id);
-        }
-
-        // Update LRU queue
-        self.lru_queue.push_back(memory_id);
-
-        self.similarity_wells.insert(memory_id, well);
-        self.wells_created += 1;
-
-        // Log memory usage warning if exceeding 4GB
-        if self.memory_usage_bytes > 4_294_967_296 {  // 4GB
-            tracing::warn!(
-                memory_usage_gb = self.memory_usage_bytes as f64 / 1_073_741_824.0,
-                wells_count = self.similarity_wells.len(),
-                "Memory usage exceeding 4GB threshold"
-            );
-        }
-
-        tracing::debug!(
-            memory_id = memory_id.0,
-            wells_count = self.similarity_wells.len(),
-            memory_usage_mb = self.memory_usage_bytes as f32 / 1_048_576.0,
-            connection_id = connection_id.as_deref().unwrap_or("none"),
-            "Similarity well created"
-        );
-
-        Ok(())
-    }
-
-    /// Process a spike pattern through the reservoir and return similarity activations
-    pub fn process_pattern(&mut self, input_pattern: &SpikePattern) -> Result<HashMap<MemoryId, f32>> {
-        // Reset reservoir state
-        self.reset_reservoir();
-
-        // Clean up expired wells periodically
-        if self.wells_created % 100 == 0 {
-            self.cleanup_expired_wells();
-        }
-
-        // Simulate the pattern through the reservoir
-        let reservoir_activity = self.simulate_pattern(input_pattern)?;
-
-        // Calculate similarity well activations
-        let mut activations = HashMap::new();
-        let mut accessed_wells = Vec::new();  // Track which wells were accessed
-
-        for (memory_id, well) in &mut self.similarity_wells {
-            let activation = well.calculate_activation(&reservoir_activity);
-            activations.insert(*memory_id, activation);
-
-            // Track wells that were accessed for LRU update
-            if activation > 0.0 {
-                accessed_wells.push(*memory_id);
-            }
-
-            // Update the well if it's activated above threshold
-            if activation > self.config.similarity_threshold {
-                well.update_from_activation(&reservoir_activity, 0.001); // Small learning rate
-            }
-        }
-
-        // Update LRU tracking after iteration
-        for memory_id in accessed_wells {
-            self.update_lru(memory_id);
-        }
-
-        Ok(activations)
-    }
-
-    /// Simulate the input pattern through the reservoir dynamics
-    fn simulate_pattern(&mut self, input_pattern: &SpikePattern) -> Result<Vec<f32>> {
-        let simulation_duration = input_pattern.duration_ms;
-        let mut time = 0.0;
-        let mut activity_trace = vec![0.0; self.config.reservoir_size];
-
-        // Create input mapping (first N neurons receive input spikes)
-        let input_neurons = std::cmp::min(input_pattern.neuron_count, self.config.reservoir_size);
-        
-        while time <= simulation_duration {
-            // Inject input spikes
-            for input_neuron in 0..input_neurons {
-                if input_neuron < input_pattern.spike_times.len() {
-                    for &spike_time in &input_pattern.spike_times[input_neuron] {
-                        if (spike_time - time).abs() < self.time_step / 2.0 {
-                            self.neurons[input_neuron].input_current += 10.0; // Strong input current
-                        }
-                    }
-                }
-            }
-
-            // Update neuron states
-            self.update_neurons(time);
-
-            // Record activity for this timestep
-            for (i, neuron) in self.neurons.iter().enumerate() {
-                // Exponential decay of activity trace
-                activity_trace[i] *= 0.99;
-                
-                // Add spike contribution
-                if neuron.potential > -55.0 { // Spike threshold
-                    activity_trace[i] += 1.0;
-                    self.total_spikes += 1;
-                }
-            }
-
-            time += self.time_step;
-        }
-
-        // Normalize activity trace
-        let max_activity = activity_trace.iter().cloned().fold(0.0f32, f32::max);
-        if max_activity > 0.0 {
-            for activity in &mut activity_trace {
-                *activity /= max_activity;
-            }
-        }
-
-        Ok(activity_trace)
-    }
-
-    /// Update all neurons using leaky integrate-and-fire dynamics
-    fn update_neurons(&mut self, current_time: f32) {
-        self.current_time = current_time;
-        
-        // Collect spike events first to avoid borrowing issues
-        let mut spike_events = Vec::new();
-        
-        // Update membrane potentials
-        for i in 0..self.neurons.len() {
-            let neuron = &mut self.neurons[i];
-            
-            // Skip if in refractory period
-            if neuron.refractory_period > 0.0 {
-                neuron.refractory_period -= self.time_step;
-                neuron.potential = -70.0; // Hold at resting potential
-                continue;
-            }
-
-            // Leaky integration
-            let tau_membrane = 20.0; // 20ms membrane time constant
-            let leak_current = -(neuron.potential - (-70.0)) / tau_membrane;
-            
-            // Update potential
-            let total_current = neuron.input_current + leak_current;
-            neuron.potential += total_current * self.time_step;
-
-            // Check for spike
-            if neuron.potential > -55.0 { // Spike threshold
-                neuron.last_spike_time = current_time;
-                neuron.refractory_period = 2.0; // 2ms refractory period
-                neuron.potential = -70.0; // Reset potential
-                
-                // Record spike for later processing
-                spike_events.push(i);
-            }
-
-            // Decay input current
-            neuron.input_current *= 0.9;
-        }
-        
-        // Process spike events
-        for spiking_neuron in spike_events {
-            // Propagate spike to connected neurons
-            for synapse in &self.synapses[spiking_neuron].clone() {
-                if synapse.target < self.neurons.len() {
-                    self.neurons[synapse.target].input_current += synapse.weight;
-                }
-            }
-        }
-    }
-
-    /// Reset reservoir to initial state
-    fn reset_reservoir(&mut self) {
-        for neuron in &mut self.neurons {
-            neuron.reset();
-        }
-        self.current_time = 0.0;
-    }
-
-    /// Get the number of similarity wells
-    pub fn get_wells_count(&self) -> usize {
-        self.similarity_wells.len()
-    }
-
-    /// Get average activation across all wells
-    pub fn get_average_activation(&self) -> f32 {
-        if self.similarity_wells.is_empty() {
-            return 0.0;
-        }
-
-        // For now, return a placeholder based on activation counts
-        let total_activations: u64 = self.similarity_wells
-            .values()
-            .map(|well| well.activation_count)
-            .sum();
-        
-        total_activations as f32 / self.similarity_wells.len() as f32
-    }
-
-    /// Estimate memory usage in bytes
-    pub fn estimate_memory_usage(&self) -> usize {
-        let neurons_size = std::mem::size_of::<NeuronState>() * self.neurons.len();
-        let synapses_size = self.synapses
-            .iter()
-            .map(|s| std::mem::size_of::<Synapse>() * s.len())
-            .sum::<usize>();
-        let wells_size = self.similarity_wells
-            .values()
-            .map(|well| {
-                std::mem::size_of::<SimilarityWell>() + 
-                well.readout_weights.len() * std::mem::size_of::<f32>() +
-                well.content.len()
-            })
-            .sum::<usize>();
-
-        neurons_size + synapses_size + wells_size
-    }
-
-    /// Optimize reservoir dynamics by pruning inactive wells
-    pub fn optimize_dynamics(&mut self) -> Result<()> {
-        let cutoff_time = std::time::Instant::now() - std::time::Duration::from_secs(3600); // 1 hour
-        
-        // Remove wells that haven't been activated recently and have low activation counts
-        self.similarity_wells.retain(|_memory_id, well| {
-            well.activation_count > 5 || well.last_activated > cutoff_time
-        });
-
-        // Normalize well strengths
-        let max_strength = self.similarity_wells
-            .values()
-            .map(|well| well.strength)
-            .fold(0.0f32, f32::max);
-        
-        if max_strength > 0.0 {
-            for well in self.similarity_wells.values_mut() {
-                well.strength /= max_strength;
-            }
-        }
-
-        tracing::info!(
-            remaining_wells = self.similarity_wells.len(),
-            "Reservoir dynamics optimized"
-        );
-
-        Ok(())
-    }
-
-    /// Get well by memory ID
-    pub fn get_well(&self, memory_id: &MemoryId) -> Option<&SimilarityWell> {
-        self.similarity_wells.get(memory_id)
-    }
-
-    /// Get all memory IDs in the reservoir
-    pub fn get_memory_ids(&self) -> Vec<MemoryId> {
-        self.similarity_wells.keys().copied().collect()
-    }
-
-    /// Evict the least recently used well
-    fn evict_lru_well(&mut self) {
-        if let Some(oldest_id) = self.lru_queue.pop_front() {
-            if let Some(well) = self.similarity_wells.remove(&oldest_id) {
-                // Update memory usage
-                let well_size = self.estimate_well_size(&well);
-                self.memory_usage_bytes = self.memory_usage_bytes.saturating_sub(well_size);
-
-                // Remove from connection tracking
-                if let Some(conn_id) = &well.connection_id {
-                    if let Some(conn_wells) = self.connection_wells.get_mut(conn_id) {
-                        conn_wells.retain(|&id| id != oldest_id);
-                    }
-                }
-
-                self.wells_evicted += 1;
-
-                tracing::debug!(
-                    memory_id = oldest_id.0,
-                    activation_count = well.activation_count,
-                    age_seconds = well.created_at.elapsed().as_secs(),
-                    "Evicted LRU well"
-                );
-            }
-        }
-    }
-
-    /// Clean up wells that have exceeded TTL
-    fn cleanup_expired_wells(&mut self) {
-        let now = Instant::now();
-        let ttl_duration = Duration::from_secs(self.ttl_seconds);
-
-        let expired_ids: Vec<MemoryId> = self.similarity_wells
-            .iter()
-            .filter_map(|(id, well)| {
-                if now.duration_since(well.created_at) > ttl_duration {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for id in expired_ids {
-            if let Some(well) = self.similarity_wells.remove(&id) {
-                // Update memory usage
-                let well_size = self.estimate_well_size(&well);
-                self.memory_usage_bytes = self.memory_usage_bytes.saturating_sub(well_size);
-
-                // Remove from LRU queue
-                self.lru_queue.retain(|&queue_id| queue_id != id);
-
-                // Remove from connection tracking
-                if let Some(conn_id) = &well.connection_id {
-                    if let Some(conn_wells) = self.connection_wells.get_mut(conn_id) {
-                        conn_wells.retain(|&well_id| well_id != id);
-                    }
-                }
-
-                self.wells_evicted += 1;
-
-                tracing::debug!(
-                    memory_id = id.0,
-                    age_seconds = well.created_at.elapsed().as_secs(),
-                    "Evicted expired well"
-                );
-            }
-        }
-    }
-
-    /// Clean up all wells associated with a connection
-    pub fn cleanup_connection(&mut self, connection_id: &str) {
-        if let Some(well_ids) = self.connection_wells.remove(connection_id) {
-            let wells_count = well_ids.len();
-
-            for id in well_ids {
-                if let Some(well) = self.similarity_wells.remove(&id) {
-                    // Update memory usage
-                    let well_size = self.estimate_well_size(&well);
-                    self.memory_usage_bytes = self.memory_usage_bytes.saturating_sub(well_size);
-
-                    // Remove from LRU queue
-                    self.lru_queue.retain(|&queue_id| queue_id != id);
-
-                    self.wells_evicted += 1;
-                }
-            }
-
-            tracing::info!(
-                connection_id = connection_id,
-                wells_cleaned = wells_count,
-                "Cleaned up wells for disconnected connection"
-            );
-        }
-    }
-
-    /// Estimate the memory size of a well in bytes
-    fn estimate_well_size(&self, well: &SimilarityWell) -> usize {
-        std::mem::size_of::<SimilarityWell>()
-            + well.readout_weights.len() * std::mem::size_of::<f32>()
-            + well.content.len()
-            + well.reference_pattern.spike_times.iter()
-                .map(|times| times.len() * std::mem::size_of::<f32>())
-                .sum::<usize>()
-    }
-
-    /// Update LRU order when a well is accessed
-    fn update_lru(&mut self, memory_id: MemoryId) {
-        // Remove from current position
-        self.lru_queue.retain(|&id| id != memory_id);
-        // Add to back (most recently used)
-        self.lru_queue.push_back(memory_id);
-    }
-
-    /// Get memory statistics
-    pub fn get_memory_stats(&self) -> MemoryStats {
-        MemoryStats {
-            total_wells: self.similarity_wells.len(),
-            max_wells: self.max_wells,
-            wells_created: self.wells_created,
-            wells_evicted: self.wells_evicted,
-            memory_usage_bytes: self.memory_usage_bytes,
-            memory_usage_mb: self.memory_usage_bytes as f32 / 1_048_576.0,
-            connection_count: self.connection_wells.len(),
-            ttl_seconds: self.ttl_seconds,
-        }
-    }
-
-    /// Set maximum wells limit
-    pub fn set_max_wells(&mut self, max_wells: usize) {
-        self.max_wells = max_wells;
-
-        // Evict wells if we're over the new limit
-        while self.similarity_wells.len() > self.max_wells {
-            self.evict_lru_well();
-        }
-    }
-
-    /// Set TTL for wells
-    pub fn set_ttl(&mut self, ttl_seconds: u64) {
-        self.ttl_seconds = ttl_seconds;
-    }
-
-    /// Export wells for snapshot (persistence)
-    pub fn get_wells_for_snapshot(&self) -> std::collections::HashMap<MemoryId, crate::persistence::WellSnapshot> {
-        use std::collections::HashMap;
-        use crate::persistence::WellSnapshot;
-
-        self.similarity_wells
-            .iter()
-            .map(|(memory_id, well)| {
-                let now = std::time::SystemTime::now();
-                let created_ts = now
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - (well.created_at.elapsed().as_millis() as u64);
-                let accessed_ts = now
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - (well.last_accessed.elapsed().as_millis() as u64);
-
-                (
-                    *memory_id,
-                    WellSnapshot {
-                        memory_id: *memory_id,
-                        content: well.content.clone(),
-                        strength: well.strength,
-                        activation_count: well.activation_count,
-                        connection_id: well.connection_id.clone(),
-                        created_timestamp_ms: created_ts,
-                        last_accessed_timestamp_ms: accessed_ts,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Restore wells from snapshot (persistence recovery)
-    pub fn restore_from_snapshots(
-        &mut self,
-        snapshots: std::collections::HashMap<MemoryId, crate::persistence::WellSnapshot>,
-    ) -> anyhow::Result<()> {
-        use crate::encoding::SpikePattern;
-
-        for (memory_id, snapshot) in snapshots {
-            // Create a placeholder spike pattern (will be recomputed from embeddings if needed)
-            // For now, we restore with empty spike pattern
-            let spike_pattern = SpikePattern {
-                spike_times: vec![],
-                duration_ms: 10.0,
-                neuron_count: self.config.reservoir_size,
-            };
-
-            let well = SimilarityWell::new(
-                memory_id,
-                spike_pattern,
-                snapshot.content,
-                self.config.reservoir_size,
-                snapshot.connection_id,
-            );
-
-            // Restore statistics
-            let mut restored_well = well;
-            restored_well.strength = snapshot.strength;
-            restored_well.activation_count = snapshot.activation_count;
-
-            self.similarity_wells.insert(memory_id, restored_well);
-        }
-
-        tracing::info!("Restored {} wells from snapshots", self.similarity_wells.len());
-        Ok(())
-    }
-}
-
-/// Memory statistics for monitoring
+/// Memory usage statistics (kept for compatibility with lib.rs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryStats {
     pub total_wells: usize,
@@ -795,128 +56,710 @@ pub struct MemoryStats {
     pub ttl_seconds: u64,
 }
 
+// ============================================================
+// VectorStore
+// ============================================================
+
+/// Vector store with SIMD cosine similarity and Markov-aware LRU eviction.
+pub struct VectorStore {
+    config: DSRConfig,
+
+    // Dense storage for SIMD-friendly iteration
+    entries: Vec<StoredEntry>,
+    id_to_index: HashMap<MemoryId, usize>,
+
+    // LRU tracking
+    lru_queue: VecDeque<MemoryId>,
+
+    // Connection tracking
+    connection_entries: HashMap<String, Vec<MemoryId>>,
+
+    // Markov chain access pattern tracking
+    markov_transitions: HashMap<u64, HashMap<u64, u32>>,
+    recent_accesses: VecDeque<MemoryId>,
+    markov_window_size: usize,
+
+    // Limits
+    max_entries: usize,
+    embedding_dim: usize,
+    ttl_seconds: u64,
+
+    // Stats
+    wells_created: u64,
+    wells_evicted: u64,
+    memory_usage_bytes: usize,
+}
+
+/// Backward compatibility alias.
+pub type SimilarityReservoir = VectorStore;
+
+impl VectorStore {
+    pub fn new(config: DSRConfig) -> Result<Self> {
+        let max_entries = if config.max_similarity_wells > 0 {
+            config.max_similarity_wells
+        } else {
+            100_000
+        };
+        let embedding_dim = config.embedding_dim;
+
+        info!(
+            max_entries = max_entries,
+            embedding_dim = embedding_dim,
+            "VectorStore initialized with SIMD cosine similarity"
+        );
+
+        Ok(Self {
+            config,
+            entries: Vec::with_capacity(max_entries.min(10_000)),
+            id_to_index: HashMap::new(),
+            lru_queue: VecDeque::new(),
+            connection_entries: HashMap::new(),
+            markov_transitions: HashMap::new(),
+            recent_accesses: VecDeque::new(),
+            markov_window_size: 10,
+            max_entries,
+            embedding_dim,
+            ttl_seconds: 3600,
+            wells_created: 0,
+            wells_evicted: 0,
+            memory_usage_bytes: 0,
+        })
+    }
+
+    // ========================================================
+    // Add / create entries
+    // ========================================================
+
+    /// Add a memory entry with embedding (no connection tracking).
+    pub fn create_similarity_well(
+        &mut self,
+        memory_id: MemoryId,
+        pattern: SpikePattern,
+        content: String,
+    ) -> Result<()> {
+        self.create_similarity_well_with_connection(memory_id, pattern, content, None)
+    }
+
+    /// Add a memory entry with embedding and optional connection tracking.
+    pub fn create_similarity_well_with_connection(
+        &mut self,
+        memory_id: MemoryId,
+        pattern: SpikePattern,
+        content: String,
+        connection_id: Option<String>,
+    ) -> Result<()> {
+        // Evict if at capacity
+        while self.entries.len() >= self.max_entries {
+            self.evict_lowest_score_entry();
+        }
+
+        // Remove existing entry with same ID (upsert semantics)
+        if let Some(&idx) = self.id_to_index.get(&memory_id) {
+            self.remove_entry_at(idx);
+        }
+
+        let embedding_bytes = pattern.embedding.len() * 4;
+        let content_bytes = content.len();
+
+        let entry = StoredEntry {
+            memory_id,
+            embedding: pattern.embedding,
+            l2_norm: pattern.l2_norm,
+            content,
+            connection_id: connection_id.clone(),
+            created_at: Instant::now(),
+            last_accessed: Instant::now(),
+            access_count: 0,
+            strength: 1.0,
+        };
+
+        let idx = self.entries.len();
+        self.memory_usage_bytes += embedding_bytes + content_bytes;
+        self.entries.push(entry);
+        self.id_to_index.insert(memory_id, idx);
+        self.lru_queue.push_back(memory_id);
+
+        if let Some(ref cid) = connection_id {
+            self.connection_entries
+                .entry(cid.clone())
+                .or_default()
+                .push(memory_id);
+        }
+
+        self.wells_created += 1;
+
+        debug!(
+            memory_id = memory_id.0,
+            total = self.entries.len(),
+            "Entry added to VectorStore"
+        );
+        Ok(())
+    }
+
+    // ========================================================
+    // Query / process
+    // ========================================================
+
+    /// Compute cosine similarity of query against all stored entries.
+    /// Uses rayon for parallel scan when > 1000 entries.
+    pub fn process_pattern(
+        &mut self,
+        query: &SpikePattern,
+    ) -> Result<HashMap<MemoryId, f32>> {
+        if query.l2_norm < 1e-12 || self.entries.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let query_emb = &query.embedding;
+        let query_norm = query.l2_norm;
+
+        let activations: Vec<(MemoryId, f32)> = if self.entries.len() > 1000 {
+            self.entries
+                .par_iter()
+                .map(|entry| {
+                    let sim = simd_cosine_similarity(
+                        query_emb,
+                        &entry.embedding,
+                        query_norm,
+                        entry.l2_norm,
+                    );
+                    (entry.memory_id, sim)
+                })
+                .collect()
+        } else {
+            self.entries
+                .iter()
+                .map(|entry| {
+                    let sim = simd_cosine_similarity(
+                        query_emb,
+                        &entry.embedding,
+                        query_norm,
+                        entry.l2_norm,
+                    );
+                    (entry.memory_id, sim)
+                })
+                .collect()
+        };
+
+        let result: HashMap<MemoryId, f32> = activations.into_iter().collect();
+
+        // Update access stats for entries above threshold
+        let threshold = self.config.similarity_threshold;
+        for entry in &mut self.entries {
+            if let Some(&sim) = result.get(&entry.memory_id) {
+                if sim > threshold {
+                    entry.last_accessed = Instant::now();
+                    entry.access_count += 1;
+                }
+            }
+        }
+
+        self.update_markov_transitions(&result);
+
+        Ok(result)
+    }
+
+    // ========================================================
+    // Accessors
+    // ========================================================
+
+    /// Get a reference to a stored entry by memory ID.
+    pub fn get_entry(&self, memory_id: &MemoryId) -> Option<&StoredEntry> {
+        self.id_to_index
+            .get(memory_id)
+            .map(|&idx| &self.entries[idx])
+    }
+
+    /// Backward compatibility alias for get_entry.
+    pub fn get_well(&self, memory_id: &MemoryId) -> Option<&StoredEntry> {
+        self.get_entry(memory_id)
+    }
+
+    pub fn get_wells_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn get_average_activation(&self) -> f32 {
+        if self.entries.is_empty() {
+            return 0.0;
+        }
+        self.entries.iter().map(|e| e.access_count as f32).sum::<f32>()
+            / self.entries.len() as f32
+    }
+
+    pub fn estimate_memory_usage(&self) -> f32 {
+        self.memory_usage_bytes as f32 / (1024.0 * 1024.0)
+    }
+
+    pub fn get_memory_ids(&self) -> Vec<MemoryId> {
+        self.entries.iter().map(|e| e.memory_id).collect()
+    }
+
+    pub fn get_memory_stats(&self) -> MemoryStats {
+        MemoryStats {
+            total_wells: self.entries.len(),
+            max_wells: self.max_entries,
+            wells_created: self.wells_created,
+            wells_evicted: self.wells_evicted,
+            memory_usage_bytes: self.memory_usage_bytes,
+            memory_usage_mb: self.memory_usage_bytes as f32 / 1_048_576.0,
+            connection_count: self.connection_entries.len(),
+            ttl_seconds: self.ttl_seconds,
+        }
+    }
+
+    // ========================================================
+    // Connection management
+    // ========================================================
+
+    /// Clean up all entries for a connection.
+    pub fn cleanup_connection(&mut self, connection_id: &str) {
+        if let Some(ids) = self.connection_entries.remove(connection_id) {
+            let count = ids.len();
+            for id in ids {
+                if let Some(&idx) = self.id_to_index.get(&id) {
+                    self.remove_entry_at(idx);
+                    self.wells_evicted += 1;
+                }
+            }
+            info!(
+                connection_id = connection_id,
+                wells_cleaned = count,
+                "Cleaned up entries for disconnected connection"
+            );
+        }
+    }
+
+    // ========================================================
+    // Optimization / maintenance
+    // ========================================================
+
+    /// Optimize: prune expired entries and compact Markov state.
+    pub fn optimize_dynamics(&mut self) -> Result<()> {
+        self.cleanup_expired_entries();
+
+        // Compact Markov transitions (remove low-count entries)
+        self.markov_transitions.retain(|_, transitions| {
+            transitions.retain(|_, count| *count > 1);
+            !transitions.is_empty()
+        });
+
+        info!(
+            remaining_entries = self.entries.len(),
+            "VectorStore dynamics optimized"
+        );
+        Ok(())
+    }
+
+    /// Set maximum entries limit.
+    pub fn set_max_wells(&mut self, max_wells: usize) {
+        self.max_entries = max_wells;
+        while self.entries.len() > self.max_entries {
+            self.evict_lowest_score_entry();
+        }
+    }
+
+    /// Set TTL for entries.
+    pub fn set_ttl(&mut self, ttl_seconds: u64) {
+        self.ttl_seconds = ttl_seconds;
+    }
+
+    // ========================================================
+    // Persistence: snapshots
+    // ========================================================
+
+    /// Export entries as snapshots for persistence.
+    pub fn get_wells_for_snapshot(&self) -> HashMap<MemoryId, WellSnapshot> {
+        let now = std::time::SystemTime::now();
+        let now_ms = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        self.entries
+            .iter()
+            .map(|entry| {
+                let created_ms =
+                    now_ms.saturating_sub(entry.created_at.elapsed().as_millis() as u64);
+                let accessed_ms =
+                    now_ms.saturating_sub(entry.last_accessed.elapsed().as_millis() as u64);
+
+                (
+                    entry.memory_id,
+                    WellSnapshot {
+                        memory_id: entry.memory_id,
+                        content: entry.content.clone(),
+                        strength: entry.strength,
+                        activation_count: entry.access_count,
+                        connection_id: entry.connection_id.clone(),
+                        created_timestamp_ms: created_ms,
+                        last_accessed_timestamp_ms: accessed_ms,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Restore entries from snapshots.
+    ///
+    /// Restored entries have zero embeddings and will not match queries
+    /// until re-added with actual embeddings.
+    pub fn restore_from_snapshots(
+        &mut self,
+        snapshots: HashMap<MemoryId, WellSnapshot>,
+    ) -> Result<()> {
+        for (memory_id, snap) in snapshots {
+            let entry = StoredEntry {
+                memory_id,
+                embedding: vec![0.0; self.embedding_dim],
+                l2_norm: 0.0,
+                content: snap.content,
+                connection_id: snap.connection_id.clone(),
+                created_at: Instant::now(),
+                last_accessed: Instant::now(),
+                access_count: snap.activation_count,
+                strength: snap.strength,
+            };
+
+            let idx = self.entries.len();
+            self.memory_usage_bytes += entry.embedding.len() * 4 + entry.content.len();
+            self.entries.push(entry);
+            self.id_to_index.insert(memory_id, idx);
+            self.lru_queue.push_back(memory_id);
+
+            if let Some(ref cid) = snap.connection_id {
+                self.connection_entries
+                    .entry(cid.clone())
+                    .or_default()
+                    .push(memory_id);
+            }
+        }
+
+        info!(
+            total_entries = self.entries.len(),
+            "Restored entries from snapshots"
+        );
+        Ok(())
+    }
+
+    // ========================================================
+    // Markov chain access pattern tracking
+    // ========================================================
+
+    fn update_markov_transitions(&mut self, activations: &HashMap<MemoryId, f32>) {
+        let threshold = self.config.similarity_threshold;
+
+        let mut top: Vec<_> = activations
+            .iter()
+            .filter(|(_, &score)| score > threshold)
+            .collect();
+        top.sort_by(|a, b| {
+            b.1.partial_cmp(a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        top.truncate(5);
+
+        let accessed: Vec<MemoryId> = top.iter().map(|(&id, _)| id).collect();
+
+        // Record transitions: recent -> current
+        for recent in &self.recent_accesses {
+            for current in &accessed {
+                if recent != current {
+                    *self
+                        .markov_transitions
+                        .entry(recent.0)
+                        .or_default()
+                        .entry(current.0)
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+
+        for id in &accessed {
+            self.recent_accesses.push_back(*id);
+        }
+        while self.recent_accesses.len() > self.markov_window_size {
+            self.recent_accesses.pop_front();
+        }
+    }
+
+    /// How likely is this entry to be accessed next based on Markov chains?
+    fn compute_markov_prediction(&self, memory_id: MemoryId) -> f32 {
+        let mut score = 0.0f32;
+        for recent in &self.recent_accesses {
+            if let Some(transitions) = self.markov_transitions.get(&recent.0) {
+                let total: u32 = transitions.values().sum();
+                if total > 0 {
+                    if let Some(&count) = transitions.get(&memory_id.0) {
+                        score += count as f32 / total as f32;
+                    }
+                }
+            }
+        }
+        score
+    }
+
+    // ========================================================
+    // Eviction
+    // ========================================================
+
+    /// Evict the entry with lowest combined score (recency * frequency * markov).
+    fn evict_lowest_score_entry(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+        let max_ac = self
+            .entries
+            .iter()
+            .map(|e| e.access_count)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+
+        let mut worst_idx = 0;
+        let mut worst_score = f32::MAX;
+
+        for (idx, entry) in self.entries.iter().enumerate() {
+            let secs = now.duration_since(entry.last_accessed).as_secs_f32();
+            let recency = 1.0 / (1.0 + secs / 3600.0);
+            let frequency =
+                (1.0 + entry.access_count as f32).ln() / (1.0 + max_ac as f32).ln();
+            let markov = self.compute_markov_prediction(entry.memory_id);
+            let score = recency * frequency * (1.0 + markov);
+
+            if score < worst_score {
+                worst_score = score;
+                worst_idx = idx;
+            }
+        }
+
+        let evicted_id = self.entries[worst_idx].memory_id;
+        self.remove_entry_at(worst_idx);
+        self.wells_evicted += 1;
+
+        debug!(
+            memory_id = evicted_id.0,
+            score = worst_score,
+            "Evicted lowest-score entry"
+        );
+    }
+
+    fn cleanup_expired_entries(&mut self) {
+        let now = Instant::now();
+        let ttl = self.ttl_seconds;
+
+        let expired: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| now.duration_since(e.last_accessed).as_secs() > ttl)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        // Remove in reverse order to preserve indices
+        for &idx in expired.iter().rev() {
+            self.remove_entry_at(idx);
+            self.wells_evicted += 1;
+        }
+
+        if !expired.is_empty() {
+            debug!(
+                count = expired.len(),
+                "Cleaned up expired entries"
+            );
+        }
+    }
+
+    /// Remove entry at index using swap_remove for O(1).
+    fn remove_entry_at(&mut self, idx: usize) {
+        if idx >= self.entries.len() {
+            return;
+        }
+
+        let removed = self.entries.swap_remove(idx);
+        self.id_to_index.remove(&removed.memory_id);
+        self.memory_usage_bytes = self
+            .memory_usage_bytes
+            .saturating_sub(removed.embedding.len() * 4 + removed.content.len());
+
+        // LRU queue cleanup
+        self.lru_queue.retain(|id| *id != removed.memory_id);
+
+        // Markov cleanup
+        self.markov_transitions.remove(&removed.memory_id.0);
+
+        // Fix swapped entry's index (swap_remove moves last element to idx)
+        if idx < self.entries.len() {
+            let swapped_id = self.entries[idx].memory_id;
+            self.id_to_index.insert(swapped_id, idx);
+        }
+    }
+}
+
+// ============================================================
+// Tests
+// ============================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoding::{RateCodingEncoder, SpikeEncoder};
-    use ndarray::array;
+    use crate::encoding::EmbeddingPattern;
 
-    #[test]
-    fn test_reservoir_creation() {
-        let config = DSRConfig::default();
-        let reservoir = SimilarityReservoir::new(config.clone()).unwrap();
+    fn make_config(max_wells: usize) -> DSRConfig {
+        DSRConfig {
+            reservoir_size: 100,
+            embedding_dim: 5,
+            max_similarity_wells: max_wells,
+            similarity_threshold: 0.7,
+            ..DSRConfig::default()
+        }
+    }
 
-        assert_eq!(reservoir.neurons.len(), config.reservoir_size);
-        assert_eq!(reservoir.synapses.len(), config.reservoir_size);
-        
-        // Check excitatory/inhibitory ratio
-        let excitatory_count = reservoir.neurons.iter().filter(|n| n.is_excitatory).count();
-        let expected_excitatory = (config.reservoir_size * 4) / 5;
-        assert_eq!(excitatory_count, expected_excitatory);
+    fn make_pattern(values: &[f32]) -> SpikePattern {
+        EmbeddingPattern::from_embedding(values.to_vec())
     }
 
     #[test]
-    fn test_similarity_well_creation() {
-        let config = DSRConfig::default();
-        let mut reservoir = SimilarityReservoir::new(config).unwrap();
-
-        let encoder = RateCodingEncoder::new(5, 10.0);
-        let embedding = array![0.1, 0.2, 0.3, 0.4, 0.5];
-        let pattern = encoder.encode(embedding.view()).unwrap();
-
-        let memory_id = MemoryId(1);
-        reservoir.create_similarity_well(
-            memory_id,
-            pattern,
-            "test memory".to_string(),
-        ).unwrap();
-
-        assert_eq!(reservoir.get_wells_count(), 1);
-        assert!(reservoir.get_well(&memory_id).is_some());
+    fn test_store_creation() {
+        let store = VectorStore::new(make_config(1000)).unwrap();
+        assert_eq!(store.get_wells_count(), 0);
     }
 
     #[test]
-    fn test_lru_eviction() {
-        let mut config = DSRConfig::default();
-        config.max_similarity_wells = 3;  // Small limit for testing
-        let mut reservoir = SimilarityReservoir::new(config).unwrap();
+    fn test_add_and_retrieve() {
+        let mut store = VectorStore::new(make_config(1000)).unwrap();
+        let pattern = make_pattern(&[0.1, 0.2, 0.3, 0.4, 0.5]);
+        let id = MemoryId(1);
 
-        let encoder = RateCodingEncoder::new(5, 10.0);
+        store
+            .create_similarity_well(id, pattern, "test".to_string())
+            .unwrap();
 
-        // Add 4 wells, should evict the first one
-        for i in 0..4 {
-            let embedding = array![0.1 * i as f32, 0.2, 0.3, 0.4, 0.5];
-            let pattern = encoder.encode(embedding.view()).unwrap();
-            let memory_id = MemoryId(i);
-            reservoir.create_similarity_well(
-                memory_id,
-                pattern,
-                format!("memory {}", i),
-            ).unwrap();
+        assert_eq!(store.get_wells_count(), 1);
+        assert!(store.get_entry(&id).is_some());
+        assert_eq!(store.get_entry(&id).unwrap().content, "test");
+    }
+
+    #[test]
+    fn test_eviction_at_capacity() {
+        let mut store = VectorStore::new(make_config(3)).unwrap();
+
+        for i in 0..4u64 {
+            let pattern = make_pattern(&[i as f32 * 0.1, 0.2, 0.3, 0.4, 0.5]);
+            store
+                .create_similarity_well(
+                    MemoryId(i),
+                    pattern,
+                    format!("mem {}", i),
+                )
+                .unwrap();
         }
 
-        // Should have only 3 wells (max_wells)
-        assert_eq!(reservoir.get_wells_count(), 3);
-        // First well should be evicted
-        assert!(reservoir.get_well(&MemoryId(0)).is_none());
-        // Later wells should still exist
-        assert!(reservoir.get_well(&MemoryId(1)).is_some());
-        assert!(reservoir.get_well(&MemoryId(2)).is_some());
-        assert!(reservoir.get_well(&MemoryId(3)).is_some());
+        assert_eq!(store.get_wells_count(), 3);
     }
 
     #[test]
     fn test_connection_cleanup() {
-        let config = DSRConfig::default();
-        let mut reservoir = SimilarityReservoir::new(config).unwrap();
+        let mut store = VectorStore::new(make_config(1000)).unwrap();
+        let conn = "conn-1";
 
-        let encoder = RateCodingEncoder::new(5, 10.0);
-        let conn_id = "test-connection";
-
-        // Add wells with connection ID
-        for i in 0..3 {
-            let embedding = array![0.1 * i as f32, 0.2, 0.3, 0.4, 0.5];
-            let pattern = encoder.encode(embedding.view()).unwrap();
-            let memory_id = MemoryId(i);
-            reservoir.create_similarity_well_with_connection(
-                memory_id,
-                pattern,
-                format!("memory {}", i),
-                Some(conn_id.to_string()),
-            ).unwrap();
+        for i in 0..3u64 {
+            let pattern = make_pattern(&[i as f32 * 0.1, 0.2, 0.3, 0.4, 0.5]);
+            store
+                .create_similarity_well_with_connection(
+                    MemoryId(i),
+                    pattern,
+                    format!("mem {}", i),
+                    Some(conn.to_string()),
+                )
+                .unwrap();
         }
 
-        assert_eq!(reservoir.get_wells_count(), 3);
-
-        // Clean up connection
-        reservoir.cleanup_connection(conn_id);
-
-        // All wells should be removed
-        assert_eq!(reservoir.get_wells_count(), 0);
+        assert_eq!(store.get_wells_count(), 3);
+        store.cleanup_connection(conn);
+        assert_eq!(store.get_wells_count(), 0);
     }
 
     #[test]
-    fn test_pattern_processing() {
-        let config = DSRConfig::default();
-        let mut reservoir = SimilarityReservoir::new(config).unwrap();
-        
-        let encoder = RateCodingEncoder::new(10, 10.0);
-        let embedding = array![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
-        let pattern = encoder.encode(embedding.view()).unwrap();
-        
-        // Create a similarity well
-        let memory_id = MemoryId(1);
-        reservoir.create_similarity_well(
-            memory_id,
-            pattern.clone(),
-            "test memory".to_string(),
-        ).unwrap();
+    fn test_process_pattern() {
+        let mut store = VectorStore::new(make_config(1000)).unwrap();
 
-        // Process the same pattern through the reservoir
-        let activations = reservoir.process_pattern(&pattern).unwrap();
-        
-        assert!(activations.contains_key(&memory_id));
-        // The exact same pattern should produce some activation
-        assert!(activations[&memory_id] >= 0.0);
+        let p1 = make_pattern(&[1.0, 0.0, 0.0, 0.0, 0.0]);
+        let p2 = make_pattern(&[0.0, 1.0, 0.0, 0.0, 0.0]);
+
+        store
+            .create_similarity_well(MemoryId(1), p1.clone(), "x-axis".to_string())
+            .unwrap();
+        store
+            .create_similarity_well(MemoryId(2), p2, "y-axis".to_string())
+            .unwrap();
+
+        let results = store.process_pattern(&p1).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Self-similarity should be ~1.0
+        let self_sim = results[&MemoryId(1)];
+        assert!(
+            (self_sim - 1.0).abs() < 1e-4,
+            "Expected ~1.0, got {}",
+            self_sim
+        );
+
+        // Orthogonal should be ~0.0
+        let ortho_sim = results[&MemoryId(2)];
+        assert!(
+            ortho_sim.abs() < 1e-4,
+            "Expected ~0.0, got {}",
+            ortho_sim
+        );
+    }
+
+    #[test]
+    fn test_memory_stats() {
+        let mut store = VectorStore::new(make_config(1000)).unwrap();
+        let pattern = make_pattern(&[0.1, 0.2, 0.3, 0.4, 0.5]);
+        store
+            .create_similarity_well(MemoryId(1), pattern, "test".to_string())
+            .unwrap();
+
+        let stats = store.get_memory_stats();
+        assert_eq!(stats.total_wells, 1);
+        assert_eq!(stats.max_wells, 1000);
+        assert!(stats.memory_usage_bytes > 0);
+    }
+
+    #[test]
+    fn test_snapshot_roundtrip() {
+        let mut store = VectorStore::new(make_config(1000)).unwrap();
+        let pattern = make_pattern(&[0.1, 0.2, 0.3, 0.4, 0.5]);
+        store
+            .create_similarity_well(MemoryId(42), pattern, "hello".to_string())
+            .unwrap();
+
+        let snapshots = store.get_wells_for_snapshot();
+        assert_eq!(snapshots.len(), 1);
+        assert!(snapshots.contains_key(&MemoryId(42)));
+
+        let mut store2 = VectorStore::new(make_config(1000)).unwrap();
+        store2.restore_from_snapshots(snapshots).unwrap();
+        assert_eq!(store2.get_wells_count(), 1);
+        assert_eq!(
+            store2.get_entry(&MemoryId(42)).unwrap().content,
+            "hello"
+        );
+    }
+
+    #[test]
+    fn test_optimize_dynamics() {
+        let mut store = VectorStore::new(make_config(1000)).unwrap();
+        let pattern = make_pattern(&[0.1, 0.2, 0.3, 0.4, 0.5]);
+        store
+            .create_similarity_well(MemoryId(1), pattern, "test".to_string())
+            .unwrap();
+
+        // Should not error
+        store.optimize_dynamics().unwrap();
     }
 }
