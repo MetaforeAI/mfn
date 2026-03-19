@@ -318,23 +318,49 @@ async fn handle_predict_context(
 }
 
 async fn handle_get_context_history(
-    _layer: &Arc<ContextPredictionLayer>,
+    layer: &Arc<ContextPredictionLayer>,
     request: &ContextRequest,
     _conn_id: &str,
 ) -> ContextResponse {
     let memory_id = request.payload.get("memory_id")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(|v| v.as_u64());
+
+    let analyzer = layer.get_analyzer().await;
+
+    // Filter by memory_id if provided (non-zero), otherwise return all history
+    let filter = memory_id.filter(|&id| id != 0);
+    let accesses = analyzer.get_access_history(filter);
+    let total_accesses = accesses.len();
+
+    // Build history entries from actual access records
+    let history: Vec<serde_json::Value> = accesses.iter().map(|access| {
+        serde_json::json!({
+            "memory_id": access.memory_id,
+            "timestamp": access.timestamp,
+            "access_type": format!("{:?}", access.access_type),
+            "context": access.user_context,
+            "confidence": access.confidence,
+        })
+    }).collect();
+
+    // Calculate pattern strength for the specific memory if requested
+    let pattern_strength = match filter {
+        Some(mid) => analyzer.get_pattern_strength(mid),
+        None => {
+            let stats = analyzer.get_statistics();
+            stats.average_pattern_confidence
+        }
+    };
 
     ContextResponse {
         response_type: "GetContextHistory_Response".to_string(),
         request_id: request.request_id.clone(),
         success: true,
         data: serde_json::json!({
-            "memory_id": memory_id,
-            "history": [],
-            "total_accesses": 0,
-            "pattern_strength": 0.0
+            "memory_id": memory_id.unwrap_or(0),
+            "history": history,
+            "total_accesses": total_accesses,
+            "pattern_strength": pattern_strength
         }),
     }
 }

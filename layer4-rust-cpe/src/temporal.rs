@@ -1253,6 +1253,30 @@ impl TemporalAnalyzer {
         self.access_window.iter().map(|a| a.memory_id).collect()
     }
 
+    /// Get access history, optionally filtered by a specific memory_id.
+    /// Returns a list of MemoryAccess records and the total count of accesses
+    /// matching the filter (or all accesses if no filter is provided).
+    pub fn get_access_history(&self, memory_id_filter: Option<MemoryId>) -> Vec<&MemoryAccess> {
+        match memory_id_filter {
+            Some(mid) => self.access_window.iter()
+                .filter(|a| a.memory_id == mid)
+                .collect(),
+            None => self.access_window.iter().collect(),
+        }
+    }
+
+    /// Calculate a pattern strength score for a given memory_id based on how
+    /// frequently it appears in detected patterns relative to total patterns.
+    pub fn get_pattern_strength(&self, memory_id: MemoryId) -> f64 {
+        if self.patterns.is_empty() {
+            return 0.0;
+        }
+        let matching = self.patterns.values()
+            .filter(|p| p.sequence.contains(&memory_id))
+            .count();
+        matching as f64 / self.patterns.len() as f64
+    }
+
     /// Get memory usage statistics
     pub fn get_memory_stats(&self) -> String {
         format!(

@@ -684,20 +684,19 @@ func (alm *ALM) getEdgesForSnapshot() map[persistence.MemoryId]*persistence.Edge
 	return edges
 }
 
-// discoverAssociations automatically discovers associations for a new memory
+// discoverAssociations automatically discovers associations for a new memory.
+// It collects all associations to add while holding the RLock, then releases
+// the lock before adding them to avoid lock-unlock-relock cycles.
 func (alm *ALM) discoverAssociations(memory *Memory) {
-	// This is a placeholder for more sophisticated association discovery
-	// In a real implementation, this might use NLP, embedding similarity, etc.
-	
+	var toAdd []*Association
+
 	alm.mu.RLock()
-	defer alm.mu.RUnlock()
-	
-	// Find memories with similar tags
+	// Find memories with similar tags and collect associations to create
 	for _, otherMemory := range alm.graph.GetAllMemories() {
 		if otherMemory.ID == memory.ID {
 			continue
 		}
-		
+
 		// Calculate tag similarity
 		commonTags := 0
 		for _, tag1 := range memory.Tags {
@@ -708,11 +707,11 @@ func (alm *ALM) discoverAssociations(memory *Memory) {
 				}
 			}
 		}
-		
+
 		if commonTags > 0 {
 			weight := float64(commonTags) / float64(len(memory.Tags)+len(otherMemory.Tags)-commonTags)
 			if weight >= alm.config.MinAssocThreshold {
-				assoc := &Association{
+				toAdd = append(toAdd, &Association{
 					ID:           uuid.New().String(),
 					FromMemoryID: memory.ID,
 					ToMemoryID:   otherMemory.ID,
@@ -720,14 +719,15 @@ func (alm *ALM) discoverAssociations(memory *Memory) {
 					Weight:       weight,
 					Reason:       fmt.Sprintf("Common tags: %d", commonTags),
 					CreatedAt:    time.Now(),
-				}
-				
-				// Add association (unlock to avoid deadlock)
-				alm.mu.RUnlock()
-				alm.AddAssociation(assoc)
-				alm.mu.RLock()
+				})
 			}
 		}
+	}
+	alm.mu.RUnlock()
+
+	// Add all discovered associations without holding any lock
+	for _, assoc := range toAdd {
+		alm.AddAssociation(assoc)
 	}
 }
 

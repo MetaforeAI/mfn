@@ -14,8 +14,6 @@ members = [
     "mfn-core",
     "mfn-integration",
     "mfn-binary-protocol",
-    "mfn-monolith",
-    "mfn-unified-socket",
 ]
 exclude = ["lmdb-benchmark"]
 

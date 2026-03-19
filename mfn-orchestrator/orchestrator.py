@@ -424,16 +424,26 @@ class MFNOrchestrator:
             return {"success": False, "error": f"Unexpected response: {response.get('type', 'unknown')}"}
         return result
     
-    def _text_to_embedding(self, text: str) -> List[float]:
-        """Convert text to embedding vector for Layer 2.
-        For now, using a simple hash-based approach.
-        In production, this would use a proper embedding model."""
-        # Simple hash-based embedding for testing
-        # Creates a 768-dimensional vector (matching typical BERT embeddings)
-        np.random.seed(hash(text) % (2**32))
-        embedding = np.random.randn(768).astype(np.float32)
-        # Normalize to unit vector
-        embedding = embedding / np.linalg.norm(embedding)
+    def _text_to_embedding(self, text: str, dim: int = 768) -> List[float]:
+        """Convert text to a bag-of-ngrams embedding vector for Layer 2.
+        Uses word-level and character trigram features so that texts sharing
+        words or substrings produce embeddings with non-zero cosine similarity.
+        In production, this would use a proper embedding model (e.g. BERT)."""
+        embedding = np.zeros(dim, dtype=np.float32)
+        text_lower = text.lower()
+        # Word-level features
+        for word in text_lower.split():
+            idx = hash(word) % dim
+            embedding[idx] += 1.0
+        # Character trigram features for partial matching
+        for i in range(len(text_lower) - 2):
+            trigram = text_lower[i:i+3]
+            idx = hash(trigram) % dim
+            embedding[idx] += 0.5
+        # L2 normalize to unit vector
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding /= norm
         return embedding.tolist()
 
     def _query_layer1(self, query: str) -> Dict[str, Any]:
@@ -560,11 +570,10 @@ class MFNOrchestrator:
         return result
 
     def _text_to_embedding_256(self, text: str) -> List[float]:
-        """Convert text to 256-dimensional embedding vector for Layer 5 PSR."""
-        np.random.seed(hash(text) % (2**32))
-        embedding = np.random.randn(256).astype(np.float32)
-        embedding = embedding / np.linalg.norm(embedding)
-        return embedding.tolist()
+        """Convert text to 256-dimensional embedding vector for Layer 5 PSR.
+        Uses the same bag-of-ngrams approach as _text_to_embedding but with
+        a smaller dimensionality."""
+        return self._text_to_embedding(text, dim=256)
     
     def _send_unix_socket_message(self, layer: str, message: Dict[str, Any]) -> Dict[str, Any]:
         """Send message to Unix socket and return response (text protocol)"""

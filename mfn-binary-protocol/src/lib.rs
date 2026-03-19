@@ -918,6 +918,7 @@ pub enum LayerId {
     Layer2 = 0x02,
     Layer3 = 0x03,
     Layer4 = 0x04,
+    Layer5 = 0x05,
     Broadcast = 0xFF,
 }
 
@@ -928,6 +929,7 @@ impl LayerId {
             0x02 => Ok(LayerId::Layer2),
             0x03 => Ok(LayerId::Layer3),
             0x04 => Ok(LayerId::Layer4),
+            0x05 => Ok(LayerId::Layer5),
             0xFF => Ok(LayerId::Broadcast),
             _ => Err(MfnProtocolError::DeserializationError(
                 format!("Invalid layer ID: {}", value)
