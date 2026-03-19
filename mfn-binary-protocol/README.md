@@ -223,7 +223,7 @@ The included benchmarks demonstrate:
 
 ## 📄 License
 
-MIT License - see LICENSE file for details.
+Business Source License 1.1 (BUSL-1.1) - see LICENSE file for details.
 
 ---
 

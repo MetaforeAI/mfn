@@ -213,7 +213,7 @@ Works on all modern browsers without polyfills:
 
 ## License
 
-MIT License - See parent repository LICENSE file
+Business Source License 1.1 - See parent repository LICENSE file
 
 ## Contributing
 

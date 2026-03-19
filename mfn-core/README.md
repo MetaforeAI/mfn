@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/mfn-core.svg)](https://crates.io/crates/mfn-core)
 [![Documentation](https://docs.rs/mfn-core/badge.svg)](https://docs.rs/mfn-core)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
 
 The foundational library for the Memory Flow Network (MFN) system - a revolutionary multi-layer memory architecture that treats memories as network packets flowing through specialized processing layers.
 
@@ -250,7 +250,7 @@ See the [examples](examples/) directory for complete implementations and integra
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Business Source License 1.1 (BUSL-1.1) - see the [LICENSE](LICENSE) file for details.
 
 ## 🤝 Contributing
 
