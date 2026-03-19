@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["MFN Team <team@mfn.dev>"]
 description = "Memory Flow Network Layer 2: Dynamic Similarity Reservoir"
-license = "MIT"
+license = "BUSL-1.1"
 
 [dependencies]
 # Core dependencies

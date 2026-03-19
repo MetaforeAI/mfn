@@ -26,11 +26,11 @@ from mfn_client import MFNClient
 
 client = MFNClient()
 
-# Store a memory across layers
+# Store a memory in Layer 1 for instant recall
 client.ifr_add_memory(
-    pool_id="my_app",
-    content="The user prefers dark mode and concise responses",
-    tags=["preferences", "ui"]
+    content="user_preferences",
+    memory_data="The user prefers dark mode and concise responses",
+    pool_id="my_app"
 )
 
 # Search by association
@@ -48,7 +48,7 @@ predictions = client.cpe_predict(
 
 # Find similar patterns
 matches = client.psr_similarity_search(
-    embedding=[0.1, 0.2, ...],  # 256-dim vector
+    query_embedding=[0.1, 0.2, ...],  # 256-dim vector
     top_k=5,
     min_confidence=0.3
 )

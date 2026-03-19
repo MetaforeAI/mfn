@@ -2,8 +2,8 @@
 name = "mfn-integration"
 version = "0.1.0"
 edition = "2021"
-authors = ["The Agency Institute"]
-license = "MIT"
+authors = ["MetaFore"]
+license = "BUSL-1.1"
 description = "Memory Flow Network Integration Examples and Testing"
 homepage = "https://github.com/TheAgencyInstitute/mfn-system"
 repository = "https://github.com/TheAgencyInstitute/mfn-system"

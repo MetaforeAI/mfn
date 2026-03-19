@@ -2,8 +2,8 @@
 name = "layer4-rust-cpe"
 version = "0.1.0"
 edition = "2021"
-authors = ["The Agency Institute"]
-license = "MIT"
+authors = ["MetaFore"]
+license = "BUSL-1.1"
 description = "Layer 4: Context Prediction Engine - Temporal pattern analysis and memory access prediction"
 homepage = "https://github.com/TheAgencyInstitute/mfn-system"
 repository = "https://github.com/TheAgencyInstitute/mfn-system"

@@ -2,8 +2,8 @@
 name = "layer5-rust-psr"
 version = "0.1.0"
 edition = "2021"
-authors = ["The Agency Institute"]
-license = "MIT"
+authors = ["MetaFore"]
+license = "BUSL-1.1"
 description = "Layer 5: Pattern Structure Registry - Pattern storage and similarity search for APEX"
 
 [dependencies]
