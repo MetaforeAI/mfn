@@ -30,11 +30,11 @@ RUN cargo build --release \
 # Stage 2: Go Builder — layer3 ALM
 # =============================================================================
 FROM golang:1.21-alpine AS go-builder
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache gcc musl-dev lmdb-dev
 
 WORKDIR /build/layer3
 COPY layer3-go-alm/ .
-RUN go mod download && go build -o layer3_alm .
+RUN go mod download && CGO_ENABLED=1 go build -ldflags='-s -w -extldflags "-static"' -o layer3_alm .
 
 # =============================================================================
 # Stage 3: Zig Builder — layer1 IFR
